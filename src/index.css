@@ -1,0 +1,211 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Hide scrollbar while maintaining scroll functionality */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* Optimize touch interactions */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button {
+  -webkit-touch-callout: none;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slideUp {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+}
+
+@keyframes glow {
+  0%, 100% {
+    box-shadow: 0 0 20px rgba(234, 179, 8, 0.4), 0 0 40px rgba(234, 179, 8, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 30px rgba(234, 179, 8, 0.6), 0 0 60px rgba(234, 179, 8, 0.3);
+  }
+}
+
+@keyframes winningPulse {
+  0%, 100% {
+    transform: scale(1.1);
+    box-shadow: 0 0 0 2px #22d3ee;
+  }
+  50% {
+    transform: scale(1.15);
+    box-shadow: 0 0 0 3px #22d3ee, 0 0 15px rgba(34, 211, 238, 0.5);
+  }
+}
+
+@keyframes lastNumberGlow {
+  0%, 100% {
+    transform: scale(1.1);
+    box-shadow: 0 0 0 3px #fbbf24, 0 0 20px rgba(251, 191, 36, 0.6);
+  }
+  50% {
+    transform: scale(1.2);
+    box-shadow: 0 0 0 4px #fbbf24, 0 0 30px rgba(251, 191, 36, 0.8);
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.2s ease-out;
+}
+
+.animate-slideUp {
+  animation: slideUp 0.3s ease-out;
+}
+
+.animate-slide-in-right {
+  animation: slideInRight 0.3s ease-out;
+}
+
+.animate-pulse-scale {
+  animation: pulse 0.5s ease-in-out;
+}
+
+/* Winning card styles - first winner */
+.winning-card-primary {
+  border-color: #eab308;
+  background: linear-gradient(135deg, #fef9c3 0%, #fef3c7 100%);
+  border-width: 3px;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.15), 0 10px 10px -5px rgba(0, 0, 0, 0.08);
+  animation: glow 2s ease-in-out infinite;
+}
+
+/* Winning cells styling */
+.winning-cell {
+  background-color: #06b6d4;
+  color: white;
+  border-color: #0e7490;
+  border-width: 2px;
+  animation: winningPulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  transition: all 0.3s ease;
+  cursor: pointer;
+}
+
+.winning-cell:hover {
+  background-color: #0891b2;
+  transform: scale(1.2);
+  box-shadow: 0 0 0 3px #22d3ee, 0 0 20px rgba(34, 211, 238, 0.6);
+  z-index: 10;
+}
+
+/* Last winning number - the decisive number */
+.last-winning-number {
+  background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+  color: #78350f;
+  border-color: #d97706;
+  border-width: 3px;
+  animation: lastNumberGlow 1.5s ease-in-out infinite;
+  font-weight: 900;
+  transition: all 0.3s ease;
+  cursor: pointer;
+  position: relative;
+}
+
+.last-winning-number:hover {
+  background: linear-gradient(135deg, #fcd34d 0%, #fbbf24 100%);
+  transform: scale(1.25);
+  box-shadow: 0 0 0 4px #fbbf24, 0 0 30px rgba(251, 191, 36, 0.8);
+  z-index: 20;
+}
+
+.last-winning-number::after {
+  content: '🎯';
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  font-size: 14px;
+  animation: pulse 1s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes subtlePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+@keyframes slideDown {
+  from {
+    transform: translateY(-8px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.animate-slideDown {
+  animation: slideDown 0.25s ease-out;
+}
+
+.animate-subtlePulse {
+  animation: subtlePulse 2s ease-in-out infinite;
+}
+
+.shimmer-bg {
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.04) 50%, transparent 100%);
+  background-size: 200% 100%;
+  animation: shimmer 3s ease-in-out infinite;
+}
+
+.stat-value {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+.status-accent-pending { border-left: 3px solid #f59e0b; }
+.status-accent-processing { border-left: 3px solid #0ea5e9; }
+.status-accent-completed { border-left: 3px solid #10b981; }
+.status-accent-failed { border-left: 3px solid #ef4444; }
+.status-accent-refunded { border-left: 3px solid #f97316; }

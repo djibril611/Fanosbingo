@@ -221,7 +221,7 @@ export function DepositManagement({ adminKey }: DepositManagementProps) {
     }
   };
 
-  const explorerUrl = chainId === '56' ? 'https://bscscan.com' : 'https://testnet.bscscan.com';
+  const explorerUrl = 'https://bscscan.com';
 
   return (
     <div className="space-y-6">
@@ -334,7 +334,7 @@ export function DepositManagement({ adminKey }: DepositManagementProps) {
             />
           </div>
           <div>
-            <label className="block text-gray-700 font-medium mb-2">Chain ID (56=Mainnet, 97=Testnet)</label>
+            <label className="block text-gray-700 font-medium mb-2">Chain ID (56=BSC Mainnet)</label>
             <input
               type="text"
               value={chainId}

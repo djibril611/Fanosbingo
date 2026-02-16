@@ -259,12 +259,7 @@ export function BnbWithdrawalModal({
       return;
     }
 
-    // TESTNET: Skip contract balance check - contract will provide testnet funds
-    // const contractBalanceBnb = Number(formatEther(contractBalance));
-    // if (contractBalanceBnb < amountNum) {
-    //   setError(`Contract has insufficient balance. Available: ${contractBalanceBnb.toFixed(4)} BNB. Please contact support.`);
-    //   return;
-    // }
+    // Balance check disabled - let the contract handle insufficient funds on-chain
 
     setIsLoading(true);
 

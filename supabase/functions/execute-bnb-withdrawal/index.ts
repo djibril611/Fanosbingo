@@ -72,14 +72,8 @@ async function executeOnChain(
 
   const amountWei = ethers.parseEther(amountBnb.toString());
 
-  // TESTNET: Skip balance check - contract will provide testnet funds
-  // const contractBalance = await provider.getBalance(contractAddress);
-  // if (contractBalance < amountWei) {
-  //   return {
-  //     error: `Insufficient contract balance. Has: ${ethers.formatEther(contractBalance)} BNB, needs: ${amountBnb} BNB`,
-  //     code: "INSUFFICIENT_BALANCE",
-  //   };
-  // }
+  // Balance check disabled - let the contract handle insufficient funds
+  // The smart contract's withdrawTo will revert if funds are insufficient
 
   const tx = await contract.withdrawTo(walletAddress, amountWei, {
     gasLimit: 100000,

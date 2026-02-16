@@ -1,6 +1,6 @@
 import { createAppKit } from '@reown/appkit/react'
 import { WagmiAdapter } from '@reown/appkit-adapter-wagmi'
-import { bsc, bscTestnet } from 'viem/chains'
+import { bsc } from 'viem/chains'
 import { QueryClient } from '@tanstack/react-query'
 
 // 1. Get projectId from environment or use default
@@ -8,7 +8,7 @@ const projectId = import.meta.env.VITE_REOWN_PROJECT_ID || 'YOUR_PROJECT_ID'
 
 // 2. Set up Wagmi adapter with BSC chains
 export const wagmiAdapter = new WagmiAdapter({
-  networks: [bsc, bscTestnet],
+  networks: [bsc],
   projectId,
   ssr: false
 })
@@ -19,7 +19,7 @@ export const queryClient = new QueryClient()
 // 4. Create AppKit instance
 export const modal = createAppKit({
   adapters: [wagmiAdapter],
-  networks: [bsc, bscTestnet],
+  networks: [bsc],
   projectId,
   features: {
     analytics: false,

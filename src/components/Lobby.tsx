@@ -8,7 +8,7 @@ import WalletConnect from './WalletConnect';
 import { WalletDepositModal } from './WalletDepositModal';
 import { BnbWithdrawalModal } from './BnbWithdrawalModal';
 import { Sun, Moon, Wallet, Timer, Hash, Trophy, Coins } from 'lucide-react';
-import { formatBnb, creditsToBnb } from '../utils/formatBalance';
+import { formatBnb } from '../utils/formatBalance';
 
 interface LobbyProps {
   onJoinGame: (gameId: string, selectedNumber: number, telegramUser: TelegramUser, cardLayout?: number[][]) => void;
@@ -57,6 +57,8 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
   const [isWalletDepositModalOpen, setIsWalletDepositModalOpen] = useState(false);
   const [isBnbWithdrawalModalOpen, setIsBnbWithdrawalModalOpen] = useState(false);
 
+  const canPlay = !!telegramUser && !!registeredUser && isWalletConnected;
+
   const addToast = useCallback((message: string, type: 'success' | 'error' | 'info') => {
     const id = Math.random().toString(36).substr(2, 9);
     setToasts((prev) => [...prev, { id, message, type }]);
@@ -87,29 +89,20 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
   }, []);
 
   const loadLobbyDataOptimized = useCallback(async () => {
-    console.log('[Lobby] Loading lobby data...', { telegramUserId: telegramUser?.id });
     setIsLoadingData(true);
 
     try {
       const { data, error } = await supabase.rpc('get_lobby_data_instant', {
-        user_telegram_id: telegramUser?.id || null
+        user_telegram_id: telegramUser?.id || null,
+        user_wallet_address: (!telegramUser && walletAddress) ? walletAddress : null
       });
 
       if (error) {
         console.error('[Lobby] Error loading lobby data via RPC:', error);
-        // Continue to fallback queries instead of throwing
       }
 
       if (data) {
         const { game, serverTime, takenNumbers, players: playersList, user } = data;
-        console.log('[Lobby] Lobby data loaded:', {
-          hasGame: !!game,
-          gameStatus: game?.status,
-          startsAt: game?.starts_at,
-          serverTime,
-          hasUser: !!user,
-          takenNumbersCount: takenNumbers?.length || 0
-        });
 
         if (game) {
           setActiveGame(game);
@@ -119,76 +112,63 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
           if (serverTime) {
             const clientTime = Date.now();
             const offset = serverTime - clientTime;
-            console.log('[Lobby] Time sync:', { serverTime, clientTime, offset });
             setTimeOffset(offset);
             setIsTimeSynced(true);
           }
         } else {
-          console.log('[Lobby] No active game found, creating new game...');
           await createNewGame();
         }
 
         if (user) {
-          console.log('[Lobby] User registered:', {
-            telegram_user_id: user.telegram_user_id,
-            balance: user.deposited_balance + user.won_balance,
-            deposited: user.deposited_balance,
-            won: user.won_balance,
-            username: user.telegram_username,
-            first_name: user.telegram_first_name
-          });
           setRegisteredUser(user);
           setIsCheckingRegistration(false);
         } else {
-          console.warn('[Lobby] User not found in RPC result. Trying direct query...', {
-            searchedForTelegramId: telegramUser?.id,
-            telegramUser: telegramUser
-          });
-
-          // Fallback: Try direct query and update state if user is found
           if (telegramUser?.id) {
-            const { data: directUser, error: directError } = await supabase
+            const { data: directUser } = await supabase
               .from('telegram_users')
               .select('telegram_user_id, balance, deposited_balance, won_balance, telegram_username, telegram_first_name, referral_code, total_referrals')
               .eq('telegram_user_id', telegramUser.id)
               .maybeSingle();
 
-            console.log('[Lobby] Direct user lookup result:', {
-              found: !!directUser,
-              error: directError,
-              user: directUser
-            });
-
             if (directUser) {
-              console.log('[Lobby] User found via direct query! Updating state...');
               setRegisteredUser(directUser);
-            } else {
-              console.error('[Lobby] User not found in database. Please register via /register command.');
+            }
+          } else if (walletAddress) {
+            const { data: walletUser } = await supabase
+              .from('telegram_users')
+              .select('telegram_user_id, balance, deposited_balance, won_balance, telegram_username, telegram_first_name, referral_code, total_referrals')
+              .ilike('wallet_address', walletAddress)
+              .maybeSingle();
+
+            if (walletUser) {
+              setRegisteredUser(walletUser);
             }
           }
           setIsCheckingRegistration(false);
         }
       } else {
-        // RPC failed entirely, try fallback queries
-        console.warn('[Lobby] RPC returned no data. Attempting fallback queries...');
-
-        // Try to load user data directly
         if (telegramUser?.id) {
-          const { data: directUser, error: userError } = await supabase
+          const { data: directUser } = await supabase
             .from('telegram_users')
             .select('telegram_user_id, balance, deposited_balance, won_balance, telegram_username, telegram_first_name, referral_code, total_referrals')
             .eq('telegram_user_id', telegramUser.id)
             .maybeSingle();
 
           if (directUser) {
-            console.log('[Lobby] User loaded via fallback query:', directUser);
             setRegisteredUser(directUser);
-          } else {
-            console.error('[Lobby] User not found via fallback query:', userError);
+          }
+        } else if (walletAddress) {
+          const { data: walletUser } = await supabase
+            .from('telegram_users')
+            .select('telegram_user_id, balance, deposited_balance, won_balance, telegram_username, telegram_first_name, referral_code, total_referrals')
+            .ilike('wallet_address', walletAddress)
+            .maybeSingle();
+
+          if (walletUser) {
+            setRegisteredUser(walletUser);
           }
         }
 
-        // Try to load game data directly
         const { data: gameData } = await supabase
           .from('games')
           .select('*')
@@ -200,7 +180,6 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
         if (gameData) {
           setActiveGame(gameData);
 
-          // Load players for this game
           const { data: playersData } = await supabase
             .from('players')
             .select('id, selected_number, name, telegram_user_id')
@@ -211,7 +190,6 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
             setTakenNumbers(playersData.map(p => p.selected_number).filter(n => n !== null));
           }
         } else {
-          console.log('[Lobby] No active game in fallback. Creating new game...');
           await createNewGame();
         }
 
@@ -224,7 +202,7 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
     } finally {
       setIsLoadingData(false);
     }
-  }, [telegramUser]);
+  }, [telegramUser, walletAddress]);
 
   const getSyncedTime = useCallback(() => {
     return Date.now() + timeOffset;
@@ -241,7 +219,6 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
       });
 
       if (error) {
-        console.error('Failed to fetch card layout:', error);
         return null;
       }
 
@@ -252,8 +229,7 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
       }
 
       return null;
-    } catch (error) {
-      console.error('Error fetching card layout:', error);
+    } catch {
       return null;
     }
   }, [cardLayoutCache]);
@@ -301,10 +277,8 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
       }
 
       setCardLayoutCache(newCache);
-
       setCachedLayouts(persistLayouts).catch(() => {});
-    } catch (error) {
-      console.error('Error loading card layouts:', error);
+    } catch {
       layoutsLoadedRef.current = false;
     }
   }, []);
@@ -312,12 +286,10 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
   useEffect(() => {
     syncTimeWithServer();
 
-    // Sync more frequently for better accuracy
     const syncInterval = setInterval(() => {
       syncTimeWithServer();
     }, 30000);
 
-    // Re-sync when user returns to tab
     const handleVisibilityChange = () => {
       if (!document.hidden) {
         syncTimeWithServer();
@@ -456,25 +428,13 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
   }, [players, telegramUser]);
 
   const updateCountdown = async () => {
-    if (!activeGame) {
-      console.log('[Lobby] updateCountdown: No active game');
-      return;
-    }
+    if (!activeGame) return;
     const now = getSyncedTime();
     const startsAt = new Date(activeGame.starts_at).getTime();
     const diff = Math.max(0, Math.floor((startsAt - now) / 1000));
-    console.log('[Lobby] updateCountdown:', {
-      now,
-      startsAt,
-      diff,
-      gameStatus: activeGame.status,
-      timeOffset,
-      isTimeSynced
-    });
     setCountdown(diff);
 
     if (diff === 0 && activeGame.status === 'waiting') {
-      // Check if there are any players before starting
       const { data: players } = await supabase
         .from('players')
         .select('id')
@@ -483,7 +443,6 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
       if (players && players.length > 0) {
         await startGame();
       } else {
-        // Use server-side timestamp calculation for consistency
         const { data: serverTime } = await supabase.rpc('get_server_timestamp_ms');
 
         if (serverTime) {
@@ -500,8 +459,6 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
 
           if (updatedGame) {
             setActiveGame(updatedGame);
-
-            // Update time offset
             const clientTime = Date.now();
             const offset = serverTime - clientTime;
             setTimeOffset(offset);
@@ -511,9 +468,7 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
     }
   };
 
-
   const createNewGame = async () => {
-    // Check if there's already a waiting game
     const { data: existingWaiting } = await supabase
       .from('games')
       .select('*')
@@ -533,8 +488,6 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
     if (result) {
       const { game, serverTime } = result;
       setActiveGame(game);
-
-      // Update time offset with fresh server time
       const clientTime = Date.now();
       const offset = serverTime - clientTime;
       setTimeOffset(offset);
@@ -542,10 +495,8 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
     }
   };
 
-
   const startGame = async () => {
     if (!activeGame) return;
-
     await supabase
       .from('games')
       .update({ status: 'playing', started_at: new Date().toISOString() })
@@ -554,18 +505,17 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
   };
 
   const handleNumberClick = async (num: number, isRetry = false) => {
-    if (!telegramUser || !registeredUser || !activeGame || activeGame.status !== 'waiting') return;
+    if (!canPlay || !activeGame || activeGame.status !== 'waiting') return;
 
     if (countdown > 0 && countdown < 3 && !isRetry) {
       addToast('Selection window is about to close!', 'error');
       return;
     }
 
-    const myPlayer = players.find(p => p.telegram_user_id === telegramUser.id);
+    const myPlayer = players.find(p => p.telegram_user_id === telegramUser!.id);
     const clickedMyNumber = myPlayer && myPlayer.selected_number === num;
     const clickedOptimisticSelection = optimisticSelection === num;
 
-    // If clicking own number (confirmed or optimistic), deselect it
     if (clickedMyNumber) {
       await handleDeselectNumber(myPlayer.id);
       return;
@@ -583,19 +533,13 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
       return;
     }
 
-    // If clicking a different number while already having one selected, auto-deselect old one
     if (myPlayer && !clickedMyNumber) {
       const oldNumber = myPlayer.selected_number;
       const deselectSuccess = await handleDeselectNumber(myPlayer.id);
-
-      if (!deselectSuccess) {
-        return;
-      }
-
+      if (!deselectSuccess) return;
       addToast(`Changed from card ${oldNumber} to ${num}`, 'info');
     }
 
-    // If clicking a different number while having an optimistic selection, clear the optimistic one
     if (optimisticSelection && optimisticSelection !== num && !myPlayer) {
       setOptimisticSelection(null);
       setSelectedNumber(null);
@@ -606,27 +550,23 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
       });
     }
 
-    // Check availability with fresh state
     if (processingNumbers.has(num)) {
       addToast('That card is being processed. Please wait.', 'info');
       return;
     }
 
-    // Instant UI feedback - show card as selected immediately
     setSelectedNumber(num);
     setOptimisticSelection(num);
 
-    // Fetch layout in parallel with showing selection
     const layoutPromise = fetchCardLayout(num);
 
-    // Small delay to show instant feedback before processing
     setTimeout(() => {
       setProcessingNumbers((prev) => new Set(prev).add(num));
     }, 50);
 
     try {
       const layout = await layoutPromise;
-      await onJoinGame(activeGame.id, num, telegramUser, layout || undefined);
+      await onJoinGame(activeGame.id, num, telegramUser!, layout || undefined);
       setProcessingNumbers((prev) => {
         const next = new Set(prev);
         next.delete(num);
@@ -644,9 +584,7 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
 
       const errorMessage = error instanceof Error ? error.message : '';
 
-      if (errorMessage.includes('TELEGRAM_REQUIRED') || errorMessage.includes('Telegram connection required')) {
-        addToast('Telegram connection required to play. Please open the game through the Telegram bot.', 'error');
-      } else if (errorMessage.includes('SELECTION_CLOSED') || errorMessage.includes('Selection window has closed')) {
+      if (errorMessage.includes('SELECTION_CLOSED') || errorMessage.includes('Selection window has closed')) {
         addToast('Selection window has closed. Game is starting!', 'error');
       } else if (errorMessage.includes('duplicate') || errorMessage.includes('already been taken') || errorMessage.includes('CARD_TAKEN')) {
         addToast('That card was just taken! Please choose another.', 'info');
@@ -670,15 +608,12 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
 
     const player = players.find(p => p.id === playerId);
     const cardNumber = player?.selected_number;
-
     if (!player || !cardNumber) return false;
 
-    // Optimistically update state immediately
     setOptimisticSelection(null);
     setSelectedNumber(null);
     setPreviewCard(null);
 
-    // Create deep copies of state for rollback
     const previousPlayers = [...players];
     const previousTakenNumbers = [...takenNumbers];
 
@@ -709,8 +644,7 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
 
       addToast(`Card ${cardNumber} released`, 'info');
       return true;
-    } catch (error) {
-      // Restore state on error
+    } catch {
       addToast('Unable to deselect card. Please try again.', 'error');
       setPlayers(previousPlayers);
       setTakenNumbers(previousTakenNumbers);
@@ -718,7 +652,6 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
       return false;
     }
   };
-
 
   const playersByNumber = useMemo(() => {
     const map = new Map<number, PlayerInfo>();
@@ -763,7 +696,6 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
     return numberStatusMap.get(num)?.playerName || null;
   }, [numberStatusMap]);
 
-  // Memoize the 400-number array to avoid recreating on every render
   const numberGrid = useMemo(() => Array.from({ length: 400 }, (_, i) => i + 1), []);
 
   const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -775,24 +707,17 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
     localStorage.setItem('darkMode', String(isDarkMode));
   }, [isDarkMode]);
 
+  const displayName = telegramUser?.first_name || (walletAddress ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}` : 'Player');
+
   return (
     <div className={`min-h-screen transition-colors duration-300 ${isDarkMode ? 'bg-gradient-to-br from-gray-900 to-gray-800' : 'bg-gradient-to-br from-blue-50 to-indigo-100'} p-2 sm:p-4`}>
       <div className="max-w-4xl mx-auto pt-1">
-        {/* Modern Header */}
         <div className={`rounded-2xl mb-2 transition-all duration-300 overflow-hidden ${isDarkMode ? 'bg-gray-800/90 border border-gray-700/40 shadow-lg shadow-black/20' : 'bg-white/95 border border-gray-200/60 shadow-lg shadow-black/5'}`}>
-          {/* Top Row: Identity + Timer + Toggle */}
           <div className="flex items-center justify-between px-3 py-2.5 sm:px-4 sm:py-3">
             <div className="flex items-center gap-2.5 min-w-0">
-              {telegramUser && telegramUser.photo_url && (
-                <img
-                  src={telegramUser.photo_url}
-                  alt={telegramUser.first_name}
-                  className="w-9 h-9 rounded-xl object-cover flex-shrink-0 ring-1 ring-white/10"
-                />
-              )}
               <div className="min-w-0">
                 <p className={`text-sm font-semibold truncate ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                  {telegramUser?.first_name || 'Player'}
+                  {displayName}
                 </p>
                 {isWalletConnected && walletAddress ? (
                   <div className="flex items-center gap-1">
@@ -808,7 +733,6 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
             </div>
 
             <div className="flex items-center gap-2 flex-shrink-0">
-              {/* Countdown Timer */}
               {activeGame && countdown > 0 && (
                 <div className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl transition-all ${
                   countdown <= 5
@@ -846,9 +770,7 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
             </div>
           </div>
 
-          {/* Bottom Row: Stats Strip */}
           <div className={`flex items-stretch border-t ${isDarkMode ? 'border-gray-700/40 bg-gray-900/30' : 'border-gray-100 bg-gray-50/50'}`}>
-            {/* Card Number */}
             <div className={`flex-1 flex items-center justify-center gap-1.5 py-2 ${isDarkMode ? 'text-orange-400' : 'text-orange-600'}`}>
               <Hash className="w-3.5 h-3.5 opacity-60" />
               <span className="text-base font-bold tabular-nums">{selectedNumber || '--'}</span>
@@ -856,7 +778,6 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
 
             <div className={`w-px ${isDarkMode ? 'bg-gray-700/40' : 'bg-gray-200/80'}`} />
 
-            {/* Balance */}
             {registeredUser && (
               <>
                 <div className={`flex-1 flex items-center justify-center gap-1.5 py-2 transition-all ${balanceChanged ? 'scale-105' : ''} ${isDarkMode ? 'text-emerald-400' : 'text-emerald-600'}`}>
@@ -867,7 +788,6 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
               </>
             )}
 
-            {/* Won Balance */}
             {registeredUser && registeredUser.won_balance > 0 && (
               <>
                 <div className={`flex-1 flex items-center justify-center gap-1.5 py-2 ${isDarkMode ? 'text-yellow-400' : 'text-yellow-600'}`}>
@@ -878,7 +798,6 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
               </>
             )}
 
-            {/* Stake */}
             {activeGame && (
               <div className={`flex-1 flex items-center justify-center gap-1.5 py-2 ${isDarkMode ? 'text-blue-400' : 'text-blue-600'}`}>
                 <Wallet className="w-3.5 h-3.5 opacity-60" />
@@ -888,66 +807,27 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
           </div>
         </div>
 
-        {/* Warning Messages */}
-        {!telegramUser && !isWalletConnected && (
-          <div className={`border-l-4 p-3 mb-3 rounded transition-colors duration-300 ${isDarkMode ? 'bg-blue-900/20 border-blue-600 text-blue-300' : 'bg-blue-50 border-blue-400 text-blue-800'}`}>
-            <p className="text-sm font-semibold mb-2">Welcome to Fanos Bingo!</p>
-            <p className="text-xs mb-2 opacity-90">Connect your BNB wallet to make deposits and withdrawals.</p>
-            <p className="text-xs mb-2 opacity-90">To play games, you must first register via our Telegram bot.</p>
-            <WalletConnect
-              telegramUserId={0}
-              onWalletConnected={() => addToast('Wallet connected successfully! You can now make deposits.', 'success')}
-            />
-          </div>
-        )}
-        {!telegramUser && isWalletConnected && (
-          <div className={`border-l-4 p-3 mb-3 rounded transition-colors duration-300 ${isDarkMode ? 'bg-orange-900/20 border-orange-600 text-orange-300' : 'bg-orange-50 border-orange-400 text-orange-800'}`}>
-            <p className="text-sm font-semibold mb-2">Telegram Connection Required to Play</p>
-            <p className="text-xs mb-2 opacity-90">Your wallet is connected for deposits/withdrawals, but you need to connect via Telegram to play games.</p>
-            <p className="text-xs mb-2 opacity-90">Please open this game through our Telegram bot to start playing.</p>
-            <div className="flex gap-2 mt-3">
-              <button
-                onClick={() => setIsWalletDepositModalOpen(true)}
-                className={`flex-1 py-2 px-4 rounded-lg font-semibold transition-colors ${isDarkMode ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-emerald-600 hover:bg-emerald-700 text-white'}`}
-              >
-                Deposit BNB
-              </button>
-              <button
-                onClick={() => setIsBnbWithdrawalModalOpen(true)}
-                disabled={!registeredUser || !registeredUser.won_balance || registeredUser.won_balance === 0}
-                className={`flex-1 py-2 px-4 rounded-lg font-semibold transition-colors ${
-                  registeredUser && registeredUser.won_balance > 0
-                    ? isDarkMode ? 'bg-yellow-600 hover:bg-yellow-700 text-white' : 'bg-yellow-600 hover:bg-yellow-700 text-white'
-                    : isDarkMode ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                }`}
-              >
-                Withdraw BNB
-              </button>
-            </div>
-          </div>
-        )}
-        {telegramUser && !registeredUser && !isCheckingRegistration && (
-          <div className={`border-l-4 p-2 mb-3 rounded transition-colors duration-300 ${isDarkMode ? 'bg-yellow-900/20 border-yellow-600 text-yellow-300' : 'bg-yellow-50 border-yellow-400 text-yellow-800'}`}>
-            <p className="text-xs sm:text-sm font-medium">Please register first by sending /register to the bot</p>
-          </div>
-        )}
-        {telegramUser && registeredUser && !isWalletConnected && (
+        {/* Connect Wallet Prompt */}
+        {!isWalletConnected && (
           <div className={`border-l-4 p-3 mb-3 rounded transition-colors duration-300 ${isDarkMode ? 'bg-yellow-900/20 border-yellow-600 text-yellow-300' : 'bg-yellow-50 border-yellow-400 text-yellow-800'}`}>
             <p className="text-sm font-semibold mb-2">Connect Your BNB Wallet to Play</p>
+            <p className="text-xs mb-2 opacity-90">A wallet connection is required to deposit, withdraw, and play games.</p>
             <WalletConnect
-              telegramUserId={telegramUser.id}
-              onWalletConnected={() => addToast('Wallet connected successfully!', 'success')}
+              telegramUserId={telegramUser?.id || 0}
+              onWalletConnected={() => addToast('Wallet connected!', 'success')}
             />
           </div>
         )}
-        {isWalletConnected && telegramUser && registeredUser && (
+
+        {/* Wallet connected, ready to play */}
+        {isWalletConnected && registeredUser && (
           <div className={`border-l-4 p-3 mb-3 rounded transition-colors duration-300 ${isDarkMode ? 'bg-emerald-900/20 border-emerald-600 text-emerald-300' : 'bg-emerald-50 border-emerald-400 text-emerald-800'}`}>
             <p className="text-sm font-semibold mb-2">Crypto (BNB) Deposits & Withdrawals</p>
             <p className="text-xs mb-2 opacity-90">Deposit BNB to play or withdraw your winnings ({activeGame ? formatBnb(activeGame.stake_amount) : '0.10'} BNB per game)</p>
             <div className="flex gap-2">
               <button
                 onClick={() => setIsWalletDepositModalOpen(true)}
-                className={`flex-1 py-2 px-4 rounded-lg font-semibold transition-colors ${isDarkMode ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-emerald-600 hover:bg-emerald-700 text-white'}`}
+                className="flex-1 py-2 px-4 rounded-lg font-semibold transition-colors bg-emerald-600 hover:bg-emerald-700 text-white"
               >
                 Deposit BNB
               </button>
@@ -956,7 +836,7 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
                 disabled={!registeredUser.won_balance || registeredUser.won_balance === 0}
                 className={`flex-1 py-2 px-4 rounded-lg font-semibold transition-colors ${
                   registeredUser.won_balance > 0
-                    ? isDarkMode ? 'bg-yellow-600 hover:bg-yellow-700 text-white' : 'bg-yellow-600 hover:bg-yellow-700 text-white'
+                    ? 'bg-yellow-600 hover:bg-yellow-700 text-white'
                     : isDarkMode ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-gray-200 text-gray-400 cursor-not-allowed'
                 }`}
               >
@@ -965,6 +845,14 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
             </div>
           </div>
         )}
+
+        {/* Loading registration */}
+        {isWalletConnected && !registeredUser && isCheckingRegistration && (
+          <div className={`border-l-4 p-3 mb-3 rounded transition-colors duration-300 ${isDarkMode ? 'bg-blue-900/20 border-blue-600 text-blue-300' : 'bg-blue-50 border-blue-400 text-blue-800'}`}>
+            <p className="text-sm font-medium">Setting up your account...</p>
+          </div>
+        )}
+
         {activeGame && countdown > 25 && activeGame.status === 'waiting' && (
           <div className={`border-l-4 p-2 mb-3 rounded transition-colors duration-300 ${isDarkMode ? 'bg-blue-900/20 border-blue-500 text-blue-300' : 'bg-blue-50 border-blue-400 text-blue-800'}`}>
             <p className="text-xs sm:text-sm font-medium">Extra time! Previous game just finished - you have more time to select your card.</p>
@@ -972,8 +860,7 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
         )}
         {activeGame && countdown > 0 && countdown <= 5 && activeGame.status === 'waiting' && (
           <div className={`border-l-4 p-3 mb-3 rounded transition-all duration-300 ${countdown <= 3 ? 'animate-pulse' : ''} ${isDarkMode ? 'bg-orange-900/30 border-orange-500 text-orange-200' : 'bg-orange-50 border-orange-500 text-orange-900'}`}>
-            <p className="text-sm sm:text-base font-bold flex items-center gap-2">
-              <span className="text-xl">⚠️</span>
+            <p className="text-sm sm:text-base font-bold">
               Selection closing in {countdown} second{countdown !== 1 ? 's' : ''}!
             </p>
             <p className="text-xs sm:text-sm mt-1 opacity-90">
@@ -982,12 +869,12 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
           </div>
         )}
 
-        {/* Active Game - Number Selection Grid */}
+        {/* Number Selection Grid */}
         <div className={`rounded-xl shadow-lg p-3 sm:p-4 mb-3 transition-colors duration-300 ${isDarkMode ? 'bg-gray-800/95 border border-gray-700/50' : 'bg-white border border-gray-100'}`}>
           <div className="flex items-center justify-between mb-3">
             <div className="flex gap-2 text-[10px] sm:text-xs">
               <div className="flex items-center gap-1">
-                <div className={`w-3 h-3 rounded ${isDarkMode ? 'bg-green-500' : 'bg-green-500'}`}></div>
+                <div className="w-3 h-3 rounded bg-green-500"></div>
                 <span className={isDarkMode ? 'text-gray-300' : 'text-gray-600'}>Your pick</span>
               </div>
               <div className="flex items-center gap-1">
@@ -1003,7 +890,7 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
               const status = getNumberStatus(num);
               const playerName = getPlayerName(num);
               const isSelectionClosing = countdown < 3 && countdown > 0;
-              const isDisabled = status === 'taken' || status === 'processing' || (activeGame?.status === 'playing') || !telegramUser || !registeredUser || isSelectionClosing || false;
+              const isDisabled = status === 'taken' || status === 'processing' || (activeGame?.status === 'playing') || !canPlay || isSelectionClosing;
 
               return (
                 <button
@@ -1024,7 +911,7 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
                       ? 'bg-green-500 text-white ring-2 sm:ring-4 ring-green-400 cursor-pointer active:scale-95 active:ring-green-500'
                       : status === 'processing'
                       ? isDarkMode ? 'bg-yellow-900/40 text-yellow-400 cursor-wait border-2 border-yellow-500' : 'bg-yellow-100 text-yellow-700 cursor-wait border-2 border-yellow-400'
-                      : telegramUser && registeredUser && activeGame?.status === 'waiting'
+                      : canPlay && activeGame?.status === 'waiting'
                       ? isDarkMode ? 'bg-gray-700 text-gray-200 cursor-pointer active:scale-95 active:bg-blue-700 active:shadow-inner' : 'bg-gray-100 text-gray-800 cursor-pointer active:scale-95 active:bg-blue-200 active:shadow-inner'
                       : isDarkMode ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-gray-100 text-gray-400 cursor-not-allowed'
                     }
@@ -1042,7 +929,7 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
           </div>
         </div>
 
-        {/* Bingo Card Preview - Below Grid */}
+        {/* Bingo Card Preview */}
         {selectedNumber && (
           <div className={`rounded-xl shadow-lg p-4 mb-3 max-w-md mx-auto transition-colors duration-300 ${isDarkMode ? 'bg-gray-800/95 border border-gray-700/50' : 'bg-white border border-gray-100'}`}>
             {isLoadingPreview ? (
@@ -1073,7 +960,7 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
                             isFree ? isDarkMode ? 'bg-yellow-500 text-gray-900' : 'bg-yellow-400 text-gray-800' : isDarkMode ? 'bg-gray-700 text-gray-200' : 'bg-gray-100 text-gray-800'
                           }`}
                         >
-                          {isFree ? '★' : number}
+                          {isFree ? '\u2605' : number}
                         </div>
                       );
                     })

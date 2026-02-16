@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import { WagmiProvider } from 'wagmi';
 import { QueryClientProvider } from '@tanstack/react-query';
+import { useAccount } from 'wagmi';
 import { Lobby } from './components/Lobby';
 import { GameRoom } from './components/GameRoom';
 import { WalletDepositModal } from './components/WalletDepositModal';
@@ -9,38 +10,62 @@ import { supabase } from './lib/supabase';
 import { initTelegram, TelegramUser } from './utils/telegram';
 import { config, queryClient } from './lib/walletConfig';
 
-// Lazy load Admin component (only loaded when accessing /admin)
 const Admin = lazy(() => import('./components/Admin').then(module => ({ default: module.Admin })));
 
 type View = 'lobby' | 'game' | 'admin';
 
-function App() {
+function AppContent() {
+  const { address, isConnected } = useAccount();
   const [view, setView] = useState<View>('lobby');
-  const [telegramUser, setTelegramUser] = useState<TelegramUser | null>(null);
-  const [gameId, setGameId] = useState<string | null>(() => {
-    return localStorage.getItem('gameId');
-  });
-  const [playerId, setPlayerId] = useState<string | null>(() => {
-    return localStorage.getItem('playerId');
-  });
+  const [appUser, setAppUser] = useState<TelegramUser | null>(null);
+  const [gameId, setGameId] = useState<string | null>(() => localStorage.getItem('gameId'));
+  const [playerId, setPlayerId] = useState<string | null>(() => localStorage.getItem('playerId'));
   const [gameStarted, setGameStarted] = useState(false);
   const [showDepositModal, setShowDepositModal] = useState(false);
   const [userBalance, setUserBalance] = useState(0);
+  const walletRegistered = useRef(false);
 
   useEffect(() => {
     const telegramData = initTelegram();
-    console.log('[App] Telegram initialization result:', telegramData);
     if (telegramData.user) {
-      console.log('[App] Setting telegram user:', {
-        id: telegramData.user.id,
-        username: telegramData.user.username,
-        first_name: telegramData.user.first_name
-      });
-      setTelegramUser(telegramData.user);
-    } else {
-      console.warn('[App] No telegram user detected');
+      setAppUser(telegramData.user);
     }
   }, []);
+
+  useEffect(() => {
+    if (appUser || !isConnected || !address || walletRegistered.current) return;
+
+    const registerWalletUser = async () => {
+      try {
+        walletRegistered.current = true;
+        const { data, error } = await supabase.rpc('get_or_create_wallet_user', {
+          p_wallet_address: address,
+        });
+
+        if (error || !data?.success) {
+          walletRegistered.current = false;
+          return;
+        }
+
+        const user = data.user;
+        setAppUser({
+          id: user.telegram_user_id,
+          first_name: user.telegram_first_name || `${address.slice(0, 6)}...${address.slice(-4)}`,
+          username: user.telegram_username || undefined,
+        });
+      } catch {
+        walletRegistered.current = false;
+      }
+    };
+
+    registerWalletUser();
+  }, [isConnected, address, appUser]);
+
+  useEffect(() => {
+    if (!isConnected && !appUser) {
+      walletRegistered.current = false;
+    }
+  }, [isConnected, appUser]);
 
   useEffect(() => {
     if (gameId) {
@@ -68,13 +93,9 @@ function App() {
         .eq('id', gameId)
         .maybeSingle();
 
-      if (game?.status === 'playing') {
-        setGameStarted(true);
-      } else if (game?.status === 'finished') {
-        // Allow viewing finished game (for winner display)
+      if (game?.status === 'playing' || game?.status === 'finished') {
         setGameStarted(true);
       } else if (!game) {
-        // Only clear if game doesn't exist
         setGameId(null);
         setPlayerId(null);
         setGameStarted(false);
@@ -86,8 +107,6 @@ function App() {
 
   useEffect(() => {
     const checkForActiveGames = async () => {
-      // If currently viewing a game (whether playing or finished), don't interfere
-      // Let the GameRoom component handle its own lifecycle
       if (gameId && gameStarted) {
         const { data: currentGame } = await supabase
           .from('games')
@@ -95,17 +114,9 @@ function App() {
           .eq('id', gameId)
           .maybeSingle();
 
-        // If viewing a finished game, don't interfere - GameRoom will handle return to lobby
-        if (currentGame?.status === 'finished') {
+        if (currentGame?.status === 'finished' || currentGame?.status === 'playing') {
           return;
         }
-
-        // If viewing a playing game, just keep it as is
-        if (currentGame?.status === 'playing') {
-          return;
-        }
-
-        // Only proceed to check for new games if current game doesn't exist or is waiting
       }
 
       const { data: playingGames } = await supabase
@@ -118,19 +129,15 @@ function App() {
       if (playingGames && playingGames.length > 0) {
         const activeGameId = playingGames[0].id;
 
-        if (telegramUser) {
+        if (appUser) {
           const { data: playerRecord } = await supabase
             .from('players')
             .select('id')
             .eq('game_id', activeGameId)
-            .eq('telegram_user_id', telegramUser.id)
+            .eq('telegram_user_id', appUser.id)
             .maybeSingle();
 
-          if (playerRecord) {
-            setPlayerId(playerRecord.id);
-          } else {
-            setPlayerId(null);
-          }
+          setPlayerId(playerRecord?.id || null);
         } else {
           setPlayerId(null);
         }
@@ -138,7 +145,6 @@ function App() {
         setGameId(activeGameId);
         setGameStarted(true);
       } else {
-        // Check if current game is finished - if so, keep gameStarted=true to allow winner display
         if (gameId) {
           const { data: currentGame } = await supabase
             .from('games')
@@ -147,14 +153,11 @@ function App() {
             .maybeSingle();
 
           if (currentGame?.status === 'finished') {
-            // Keep gameStarted=true to allow GameRoom to show winners for 10 seconds
             setGameStarted(true);
           } else {
-            // No active game and current game is not finished
             setGameStarted(false);
           }
         } else {
-          // No gameId, so no game to display
           setGameStarted(false);
         }
       }
@@ -167,25 +170,21 @@ function App() {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'games' },
-        () => {
-          checkForActiveGames();
-        }
+        () => { checkForActiveGames(); }
       )
       .subscribe();
 
-    // Reduced polling frequency - realtime subscriptions handle most updates
-    // Only poll as backup when tab is visible
     const pollInterval = setInterval(() => {
       if (!document.hidden) {
         checkForActiveGames();
       }
-    }, 10000); // Reduced from 3s to 10s
+    }, 10000);
 
     return () => {
       supabase.removeChannel(activeGameChannel);
       clearInterval(pollInterval);
     };
-  }, [telegramUser, gameId, gameStarted]);
+  }, [appUser, gameId, gameStarted]);
 
   useEffect(() => {
     if (!playerId || !gameId) return;
@@ -200,14 +199,12 @@ function App() {
           if (updatedGame.status === 'playing') {
             setGameStarted(true);
           }
-          // Don't handle 'finished' status here - let GameRoom component control the timing
         }
       )
       .subscribe();
 
-    // Reduced polling as backup - realtime subscription handles most updates
     const pollInterval = setInterval(async () => {
-      if (document.hidden) return; // Skip if tab not visible
+      if (document.hidden) return;
 
       const { data: game } = await supabase
         .from('games')
@@ -218,8 +215,7 @@ function App() {
       if (game?.status === 'playing' && !gameStarted) {
         setGameStarted(true);
       }
-      // Don't handle 'finished' status here - let GameRoom component control the timing
-    }, 5000); // Reduced from 2s to 5s
+    }, 5000);
 
     return () => {
       supabase.removeChannel(playerChannel);
@@ -227,10 +223,10 @@ function App() {
     };
   }, [playerId, gameId, gameStarted]);
 
-  const handleJoinGame = async (gameId: string, selectedNumber: number, telegramUser: TelegramUser, cardLayout?: number[][]) => {
-    const playerName = telegramUser.username
-      ? `@${telegramUser.username}`
-      : telegramUser.first_name;
+  const handleJoinGame = async (gameId: string, selectedNumber: number, user: TelegramUser, cardLayout?: number[][]) => {
+    const playerName = user.username
+      ? `@${user.username}`
+      : user.first_name;
 
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
     const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -244,11 +240,11 @@ function App() {
       body: JSON.stringify({
         gameId,
         cardNumber: selectedNumber,
-        telegramUserId: telegramUser.id,
+        telegramUserId: user.id,
         playerName,
-        telegramUsername: telegramUser.username,
-        telegramFirstName: telegramUser.first_name,
-        telegramLastName: telegramUser.last_name,
+        telegramUsername: user.username || null,
+        telegramFirstName: user.first_name,
+        telegramLastName: user.last_name || null,
         cardLayout,
       }),
     });
@@ -260,7 +256,7 @@ function App() {
         const { data: userData } = await supabase
           .from('telegram_users')
           .select('deposited_balance, won_balance')
-          .eq('telegram_user_id', telegramUser.id)
+          .eq('telegram_user_id', user.id)
           .maybeSingle();
 
         setUserBalance((userData?.deposited_balance || 0) + (userData?.won_balance || 0));
@@ -285,14 +281,12 @@ function App() {
         setView('admin');
       }
     };
-
     checkAdminPath();
     window.addEventListener('popstate', checkAdminPath);
     return () => window.removeEventListener('popstate', checkAdminPath);
   }, []);
 
   const handleReturnToLobby = useCallback(() => {
-    // Clear all game-related state and localStorage
     localStorage.removeItem('gameId');
     localStorage.removeItem('playerId');
     setGameId(null);
@@ -300,55 +294,55 @@ function App() {
     setGameStarted(false);
   }, []);
 
-  const renderContent = () => {
-    if (view === 'admin') {
-      return (
-        <>
-          <Suspense fallback={<div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center"><div className="text-gray-600">Loading admin panel...</div></div>}>
-            <Admin />
-          </Suspense>
-          <NetworkQualityIndicator />
-        </>
-      );
-    }
-
-    if (gameId && gameStarted) {
-      return (
-        <>
-          <GameRoom gameId={gameId} playerId={playerId} onReturnToLobby={handleReturnToLobby} />
-          {telegramUser && (
-            <WalletDepositModal
-              isOpen={showDepositModal}
-              onClose={() => setShowDepositModal(false)}
-              telegramUserId={telegramUser.id}
-              onSuccess={() => setShowDepositModal(false)}
-            />
-          )}
-          <NetworkQualityIndicator />
-        </>
-      );
-    }
-
+  if (view === 'admin') {
     return (
       <>
-        <Lobby onJoinGame={handleJoinGame} onSpectateGame={handleSpectateGame} telegramUser={telegramUser} />
-        {telegramUser && (
+        <Suspense fallback={<div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center"><div className="text-gray-600">Loading admin panel...</div></div>}>
+          <Admin />
+        </Suspense>
+        <NetworkQualityIndicator />
+      </>
+    );
+  }
+
+  if (gameId && gameStarted) {
+    return (
+      <>
+        <GameRoom gameId={gameId} playerId={playerId} onReturnToLobby={handleReturnToLobby} />
+        {appUser && (
           <WalletDepositModal
             isOpen={showDepositModal}
             onClose={() => setShowDepositModal(false)}
-            telegramUserId={telegramUser.id}
+            telegramUserId={appUser.id}
             onSuccess={() => setShowDepositModal(false)}
           />
         )}
         <NetworkQualityIndicator />
       </>
     );
-  };
+  }
 
+  return (
+    <>
+      <Lobby onJoinGame={handleJoinGame} onSpectateGame={handleSpectateGame} telegramUser={appUser} />
+      {appUser && (
+        <WalletDepositModal
+          isOpen={showDepositModal}
+          onClose={() => setShowDepositModal(false)}
+          telegramUserId={appUser.id}
+          onSuccess={() => setShowDepositModal(false)}
+        />
+      )}
+      <NetworkQualityIndicator />
+    </>
+  );
+}
+
+function App() {
   return (
     <WagmiProvider config={config}>
       <QueryClientProvider client={queryClient}>
-        {renderContent()}
+        <AppContent />
       </QueryClientProvider>
     </WagmiProvider>
   );

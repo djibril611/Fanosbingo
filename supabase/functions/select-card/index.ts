@@ -34,9 +34,9 @@ Deno.serve(async (req: Request) => {
     if (!telegramUserId || telegramUserId <= 0) {
       return new Response(
         JSON.stringify({
-          error: 'Telegram connection required',
-          error_code: 'TELEGRAM_REQUIRED',
-          message: 'You must connect your Telegram account to play. Please open the game through the Telegram bot first.'
+          error: 'User ID required',
+          error_code: 'USER_REQUIRED',
+          message: 'Please connect your wallet first.'
         }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );

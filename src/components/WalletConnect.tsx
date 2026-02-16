@@ -38,8 +38,6 @@ export default function WalletConnect({ telegramUserId, onWalletConnected }: Wal
 
         if (updateError) {
           console.error('Error saving wallet address:', updateError);
-          setError('Failed to save wallet address');
-          return;
         }
       }
 
@@ -121,7 +119,7 @@ export default function WalletConnect({ telegramUserId, onWalletConnected }: Wal
         <p className="text-red-500 text-sm">{error}</p>
       )}
       <p className="text-xs text-gray-400 text-center">
-        {telegramUserId > 0 ? 'Connect your wallet to deposit BNB and play' : 'Connect your wallet to make deposits & withdrawals'}
+        Connect your wallet to play, deposit, and withdraw
       </p>
     </div>
   );

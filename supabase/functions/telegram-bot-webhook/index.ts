@@ -137,86 +137,7 @@ Deno.serve(async (req: Request) => {
 
       let handled = false;
 
-      if (chatId && data && data.startsWith("deposit:")) {
-        handled = true;
-        const bankId = data.replace("deposit:", "");
-
-        const { data: bank } = await supabaseClient
-          .from("bank_options")
-          .select("*")
-          .eq("id", bankId)
-          .eq("is_active", true)
-          .maybeSingle();
-
-        if (bank) {
-          let message = `ℹ️ ${bank.bank_name} አካውንት\n\n<b>Account Number:</b>\n<code>${bank.account_number}</code>\n\n<b>Account Name:</b>\n${bank.account_name}\n\n`;
-          message += bank.instructions;
-
-          const { data: supportContact } = await supabaseClient
-            .from("settings")
-            .select("value")
-            .eq("id", "support_contact")
-            .maybeSingle();
-
-          if (supportContact?.value) {
-            message += `\n\n${supportContact.value}`;
-          }
-
-          await sendTelegramMessage(
-            botToken,
-            chatId,
-            message
-          );
-          await answerCallbackQuery(botToken, callbackQuery.id);
-        } else {
-          await sendTelegramMessage(
-            botToken,
-            chatId,
-            "❌ Bank option not found or inactive. Please try /deposit again."
-          );
-          await answerCallbackQuery(botToken, callbackQuery.id, "Bank not available");
-        }
-      } else if (chatId && data && data.startsWith("withdraw_bank:")) {
-        handled = true;
-        const bankName = data.replace("withdraw_bank:", "");
-
-        const { data: userState } = await supabaseClient
-          .from("user_state")
-          .select("*")
-          .eq("telegram_user_id", user.id)
-          .maybeSingle();
-
-        if (userState && userState.state_data?.amount) {
-          const stateData = userState.state_data;
-
-          await supabaseClient
-            .from("user_state")
-            .upsert({
-              telegram_user_id: user.id,
-              current_action: "withdraw_account",
-              state_data: { ...stateData, bank_name: bankName },
-              updated_at: new Date().toISOString(),
-            });
-
-          await sendTelegramMessage(
-            botToken,
-            chatId,
-            `✅ Bank: <b>${bankName}</b>\n\n📱 Please enter your account number:\n\nExample: 0912345678`
-          );
-          await answerCallbackQuery(botToken, callbackQuery.id);
-        } else {
-          await sendTelegramMessage(
-            botToken,
-            chatId,
-            "❌ Withdrawal session expired. Please start again with /withdraw"
-          );
-          await supabaseClient
-            .from("user_state")
-            .delete()
-            .eq("telegram_user_id", user.id);
-          await answerCallbackQuery(botToken, callbackQuery.id, "Session expired");
-        }
-      } else if (chatId && data && data.startsWith("transfer_type:")) {
+      if (chatId && data && data.startsWith("transfer_type:")) {
         handled = true;
         const balanceType = data.replace("transfer_type:", "");
 
@@ -305,7 +226,7 @@ Deno.serve(async (req: Request) => {
       .eq("telegram_user_id", user.id)
       .maybeSingle();
 
-    if (userState && userState.current_action && (userState.current_action.startsWith("withdraw_") || userState.current_action.startsWith("transfer_"))) {
+    if (userState && userState.current_action && userState.current_action.startsWith("transfer_")) {
       const action = userState.current_action;
       const stateData = userState.state_data || {};
 
@@ -451,187 +372,6 @@ Deno.serve(async (req: Request) => {
           status: 200,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
-      } else if (action === "withdraw_amount") {
-        const amount = parseFloat(text);
-
-        if (isNaN(amount) || amount <= 0) {
-          await sendTelegramMessage(
-            botToken,
-            chatId,
-            "❌ Invalid amount. Please enter a valid number.\n\nExample: 100"
-          );
-          return new Response(JSON.stringify({ ok: true }), {
-            status: 200,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          });
-        }
-
-        if (amount < 100) {
-          await sendTelegramMessage(
-            botToken,
-            chatId,
-            "❌ Minimum withdrawal amount is <b>100 ETB</b>.\n\nPlease enter an amount of 100 ETB or more."
-          );
-          return new Response(JSON.stringify({ ok: true }), {
-            status: 200,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          });
-        }
-
-        const { data: userData } = await supabaseClient
-          .from("telegram_users")
-          .select("won_balance, deposited_balance, balance")
-          .eq("telegram_user_id", user.id)
-          .single();
-
-        const { data: pendingWithdrawals } = await supabaseClient
-          .from("withdrawal_requests")
-          .select("amount")
-          .eq("telegram_user_id", user.id)
-          .in("status", ["pending", "processing"]);
-
-        const pendingAmount = pendingWithdrawals?.reduce((sum: number, w: any) => sum + Number(w.amount), 0) || 0;
-        const availableWonBalance = Number(userData.won_balance) - pendingAmount;
-
-        if (amount > availableWonBalance) {
-          await sendTelegramMessage(
-            botToken,
-            chatId,
-            `❌ Insufficient won balance.\n\n💰 Total balance: <b>${userData.balance} ETB</b>\n🏆 Won balance (withdrawable): <b>${userData.won_balance} ETB</b>\n💵 Deposited balance (not withdrawable): <b>${userData.deposited_balance} ETB</b>\n⏳ Pending withdrawals: <b>${pendingAmount} ETB</b>\n✅ Available for withdrawal: <b>${availableWonBalance} ETB</b>\n\n⚠️ Note: Only winnings can be withdrawn. Deposited money can only be used to play games.\n\nPlease enter an amount up to ${availableWonBalance} ETB.`
-          );
-          return new Response(JSON.stringify({ ok: true }), {
-            status: 200,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          });
-        }
-
-        const { data: withdrawalBanks } = await supabaseClient
-          .from("withdrawal_bank_options")
-          .select("*")
-          .eq("is_active", true)
-          .order("display_order", { ascending: true });
-
-        if (!withdrawalBanks || withdrawalBanks.length === 0) {
-          await sendTelegramMessage(
-            botToken,
-            chatId,
-            "❌ No withdrawal options available at the moment. Please contact support."
-          );
-          await supabaseClient
-            .from("user_state")
-            .delete()
-            .eq("telegram_user_id", user.id);
-          return new Response(JSON.stringify({ ok: true }), {
-            status: 200,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          });
-        }
-
-        await supabaseClient
-          .from("user_state")
-          .upsert({
-            telegram_user_id: user.id,
-            current_action: "withdraw_bank",
-            state_data: { ...stateData, amount },
-            updated_at: new Date().toISOString(),
-          });
-
-        const keyboard = withdrawalBanks.map((bank: any) => [{
-          text: bank.bank_name,
-          callback_data: `withdraw_bank:${bank.bank_name}`
-        }]);
-
-        await sendTelegramMessage(
-          botToken,
-          chatId,
-          `✅ Amount: <b>${amount} ETB</b>\n\n🏦 Please select your bank:`,
-          {
-            inline_keyboard: keyboard
-          }
-        );
-      } else if (action === "withdraw_account") {
-        const accountNumber = text.trim();
-
-        if (accountNumber.length < 8) {
-          await sendTelegramMessage(
-            botToken,
-            chatId,
-            "❌ Invalid account number. Please enter a valid account number.\n\nExample: 0912345678"
-          );
-          return new Response(JSON.stringify({ ok: true }), {
-            status: 200,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          });
-        }
-
-        await supabaseClient
-          .from("user_state")
-          .upsert({
-            telegram_user_id: user.id,
-            current_action: "withdraw_name",
-            state_data: { ...stateData, account_number: accountNumber },
-            updated_at: new Date().toISOString(),
-          });
-
-        await sendTelegramMessage(
-          botToken,
-          chatId,
-          `✅ Account: <b>${accountNumber}</b>\n\n👤 Please enter the account holder name:\n\nExample: Abebe Kebede`
-        );
-      } else if (action === "withdraw_name") {
-        const accountName = text.trim();
-
-        if (accountName.length < 3) {
-          await sendTelegramMessage(
-            botToken,
-            chatId,
-            "❌ Invalid name. Please enter a valid account holder name.\n\nExample: Abebe Kebede"
-          );
-          return new Response(JSON.stringify({ ok: true }), {
-            status: 200,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          });
-        }
-
-        const withdrawalData = {
-          telegram_user_id: user.id,
-          amount: stateData.amount,
-          bank_name: stateData.bank_name,
-          account_number: stateData.account_number,
-          account_name: accountName,
-          status: "pending",
-        };
-
-        const { data: withdrawal, error: withdrawalError } = await supabaseClient
-          .from("withdrawal_requests")
-          .insert(withdrawalData)
-          .select()
-          .single();
-
-        await supabaseClient
-          .from("user_state")
-          .delete()
-          .eq("telegram_user_id", user.id);
-
-        if (withdrawalError) {
-          console.error("Error creating withdrawal:", withdrawalError);
-          await sendTelegramMessage(
-            botToken,
-            chatId,
-            "❌ Sorry, there was an error creating your withdrawal request. Please try again or contact support."
-          );
-          return new Response(JSON.stringify({ ok: true }), {
-            status: 200,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          });
-        }
-
-        const withdrawalId = withdrawal.id.slice(0, 8);
-        await sendTelegramMessage(
-          botToken,
-          chatId,
-          `✅ <b>Withdrawal Request Submitted!</b>\n\n💰 Amount: <b>${withdrawalData.amount} ETB</b>\n🏦 Bank: ${withdrawalData.bank_name}\n📱 Account: ${withdrawalData.account_number}\n👤 Name: ${accountName}\n\n⏳ Your request is now pending review. Admin will process it manually and transfer the money to your account.\n\n📝 Request ID: ${withdrawalId}\n\nYou'll receive a notification once the withdrawal is processed.\n\nProcessing time: Usually within 24 hours.`
-        );
       }
 
       return new Response(JSON.stringify({ ok: true }), {
@@ -881,53 +621,6 @@ Deno.serve(async (req: Request) => {
           balanceMessage
         );
       }
-    } else if (text.startsWith("/deposit")) {
-      await supabaseClient
-        .from("user_state")
-        .delete()
-        .eq("telegram_user_id", user.id);
-
-      const { data: existingUser } = await supabaseClient
-        .from("telegram_users")
-        .select("*")
-        .eq("telegram_user_id", user.id)
-        .maybeSingle();
-
-      if (!existingUser) {
-        await sendTelegramMessage(
-          botToken,
-          chatId,
-          "Please register first by using /register"
-        );
-      } else {
-        const { data: banks } = await supabaseClient
-          .from("bank_options")
-          .select("*")
-          .eq("is_active", true)
-          .order("display_order", { ascending: true });
-
-        if (!banks || banks.length === 0) {
-          await sendTelegramMessage(
-            botToken,
-            chatId,
-            `💳 Deposit Feature\n\nNo deposit options available at the moment. Please contact support.\n\n💰 Current balance: <b>${existingUser.balance} ETB</b>`
-          );
-        } else {
-          const keyboard = banks.map((bank: any) => [{
-            text: bank.bank_name,
-            callback_data: `deposit:${bank.id}`
-          }]);
-
-          await sendTelegramMessage(
-            botToken,
-            chatId,
-            "Please select the bank option you wish to use for the top-up.",
-            {
-              inline_keyboard: keyboard
-            }
-          );
-        }
-      }
     } else if (text.startsWith("/invite")) {
       await supabaseClient
         .from("user_state")
@@ -1030,86 +723,6 @@ Deno.serve(async (req: Request) => {
           }
         );
       }
-    } else if (text.startsWith("/withdraw")) {
-      const { data: existingUser } = await supabaseClient
-        .from("telegram_users")
-        .select("*")
-        .eq("telegram_user_id", user.id)
-        .maybeSingle();
-
-      if (!existingUser) {
-        await sendTelegramMessage(
-          botToken,
-          chatId,
-          "Please register first by using /register"
-        );
-      } else {
-        const { data: pendingRequest } = await supabaseClient
-          .from("withdrawal_requests")
-          .select("*")
-          .eq("telegram_user_id", user.id)
-          .eq("status", "pending")
-          .maybeSingle();
-
-        if (pendingRequest) {
-          await supabaseClient
-            .from("user_state")
-            .delete()
-            .eq("telegram_user_id", user.id);
-
-          const reqId = pendingRequest.id.slice(0, 8);
-          await sendTelegramMessage(
-            botToken,
-            chatId,
-            `⏳ You already have a pending withdrawal request.\n\n💰 Amount: <b>${pendingRequest.amount} ETB</b>\n🏦 Bank: ${pendingRequest.bank_name}\n📱 Account: ${pendingRequest.account_number}\n\nPlease wait for it to be processed before submitting a new request.\n\nRequest ID: ${reqId}`
-          );
-          return new Response(JSON.stringify({ ok: true }), {
-            status: 200,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          });
-        }
-
-        await supabaseClient
-          .from("user_state")
-          .delete()
-          .eq("telegram_user_id", user.id);
-
-        const { data: pendingWithdrawals } = await supabaseClient
-          .from("withdrawal_requests")
-          .select("amount")
-          .eq("telegram_user_id", user.id)
-          .in("status", ["pending", "processing"]);
-
-        const pendingAmount = pendingWithdrawals?.reduce((sum: number, w: any) => sum + Number(w.amount), 0) || 0;
-        const availableWonBalance = Number(existingUser.won_balance || 0) - pendingAmount;
-
-        if (availableWonBalance < 100) {
-          await sendTelegramMessage(
-            botToken,
-            chatId,
-            `❌ Insufficient won balance for withdrawal.\n\n💰 Total balance: <b>${existingUser.balance} ETB</b>\n🏆 Won balance: <b>${existingUser.won_balance || 0} ETB</b>\n💵 Deposited balance: <b>${existingUser.deposited_balance || 0} ETB</b>\n⏳ Pending withdrawals: <b>${pendingAmount} ETB</b>\n✅ Available for withdrawal: <b>${availableWonBalance} ETB</b>\n\n⚠️ Only winnings can be withdrawn. Deposited money can only be used to play games.\n\nMinimum withdrawal amount is <b>100 ETB</b>.\n\nPlease win more games to increase your withdrawable balance.`
-          );
-          return new Response(JSON.stringify({ ok: true }), {
-            status: 200,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          });
-        }
-
-        await supabaseClient
-          .from("user_state")
-          .upsert({
-            telegram_user_id: user.id,
-            current_action: "withdraw_amount",
-            state_data: {},
-            updated_at: new Date().toISOString(),
-          });
-
-        await sendTelegramMessage(
-          botToken,
-          chatId,
-          `💸 <b>Withdraw Funds</b>\n\n🏆 Won balance (withdrawable): <b>${existingUser.won_balance || 0} ETB</b>\n💵 Deposited balance (not withdrawable): <b>${existingUser.deposited_balance || 0} ETB</b>\n⏳ Pending withdrawals: <b>${pendingAmount} ETB</b>\n✅ Available for withdrawal: <b>${availableWonBalance} ETB</b>\n\nMinimum withdrawal: <b>100 ETB</b>\n\n⚠️ <i>Note: Only winnings can be withdrawn.</i>\n\nHow much would you like to withdraw?\n\nPlease enter the amount in ETB:\n\nExample: 100`
-        );
-      }
     } else {
       const { data: existingUser } = await supabaseClient
         .from("telegram_users")
@@ -1166,7 +779,7 @@ Deno.serve(async (req: Request) => {
           await sendTelegramMessage(
             botToken,
             chatId,
-            `ℹ️ Available Commands:\n\n/start - Start the bot\n/register - Register your account\n/play - Open the game\n/balance - Check your balance\n/deposit - Get deposit instructions\n/withdraw - Withdraw funds\n/transfer - Transfer balance to another user\n/invite - Get your referral link & earn rewards\n/instructions - View game instructions\n\n💡 Tip: After making a deposit, paste your bank SMS here to get instant credit!`
+            `ℹ️ Available Commands:\n\n/start - Start the bot\n/register - Register your account\n/play - Open the game\n/balance - Check your balance\n/transfer - Transfer balance to another user\n/invite - Get your referral link & earn rewards\n/instructions - View game instructions`
           );
         }
       }

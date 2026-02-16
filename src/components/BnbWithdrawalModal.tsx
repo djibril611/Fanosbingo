@@ -136,6 +136,16 @@ export function BnbWithdrawalModal({
   }, [onChainCredits, wonBalance, depositedBalance]);
 
   useEffect(() => {
+    if (wonBalance > 0 && depositedBalance > 0) {
+      setWithdrawalSource('both');
+    } else if (wonBalance > 0) {
+      setWithdrawalSource('won');
+    } else if (depositedBalance > 0) {
+      setWithdrawalSource('deposited');
+    }
+  }, [wonBalance, depositedBalance]);
+
+  useEffect(() => {
     if (isConfirmed && hash && !recordingWithdrawal) {
       setRecordingWithdrawal(true);
       recordWithdrawalToDatabase(hash);

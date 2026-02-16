@@ -53,7 +53,9 @@ Deno.serve(async (req: Request) => {
     if (payload.action === "complete") {
       if (!payload.transaction_hash) {
         return new Response(
-          JSON.stringify({ error: "Transaction hash is required to complete" }),
+          JSON.stringify({
+            error: "Transaction hash is required to complete",
+          }),
           {
             status: 400,
             headers: { ...corsHeaders, "Content-Type": "application/json" },

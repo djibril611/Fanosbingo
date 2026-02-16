@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase';
 import {
   ExternalLink, Clock, CheckCircle, XCircle, RefreshCw,
   TrendingDown, AlertCircle, RotateCcw, Check, Wallet,
-  Send, Zap, Copy, ArrowDownCircle
+  Copy, ArrowDownCircle, Shield
 } from 'lucide-react';
 
 interface WithdrawalRequest {
@@ -13,6 +13,7 @@ interface WithdrawalRequest {
   amount_credits: number;
   amount_bnb: number;
   status: 'pending' | 'processing' | 'completed' | 'failed' | 'refunded';
+  source: string;
   transaction_hash: string | null;
   error_message: string | null;
   created_at: string;
@@ -28,12 +29,12 @@ interface WithdrawalStats {
   pending_amount: number;
   failed_today: number;
   completed_today: number;
+  user_withdrawals_today: number;
+  admin_withdrawals_today: number;
 }
 
 interface WalletInfo {
-  walletAddress: string;
   contractAddress: string;
-  walletBalanceBnb: string;
   contractBalanceBnb: string;
 }
 
@@ -43,12 +44,12 @@ interface BnbWithdrawalManagementProps {
 
 type FilterType = 'all' | 'pending' | 'processing' | 'completed' | 'failed' | 'refunded';
 
-const STATUS_CONFIG: Record<string, { bg: string; text: string; border: string; icon: string }> = {
-  pending: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200', icon: 'clock' },
-  processing: { bg: 'bg-sky-50', text: 'text-sky-700', border: 'border-sky-200', icon: 'spin' },
-  completed: { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200', icon: 'check' },
-  failed: { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-200', icon: 'x' },
-  refunded: { bg: 'bg-orange-50', text: 'text-orange-700', border: 'border-orange-200', icon: 'alert' },
+const STATUS_CONFIG: Record<string, { bg: string; text: string }> = {
+  pending: { bg: 'bg-amber-50', text: 'text-amber-700' },
+  processing: { bg: 'bg-sky-50', text: 'text-sky-700' },
+  completed: { bg: 'bg-emerald-50', text: 'text-emerald-700' },
+  failed: { bg: 'bg-red-50', text: 'text-red-700' },
+  refunded: { bg: 'bg-orange-50', text: 'text-orange-700' },
 };
 
 function timeAgo(dateStr: string): string {
@@ -66,7 +67,6 @@ export function BnbWithdrawalManagement({ adminKey }: BnbWithdrawalManagementPro
   const [isLoading, setIsLoading] = useState(true);
   const [filter, setFilter] = useState<FilterType>('all');
   const [actionLoading, setActionLoading] = useState<string | null>(null);
-  const [bulkExecuting, setBulkExecuting] = useState(false);
   const [completeModal, setCompleteModal] = useState<{ id: string; wallet: string; amount: number } | null>(null);
   const [txHashInput, setTxHashInput] = useState('');
   const [actionError, setActionError] = useState('');
@@ -107,29 +107,26 @@ export function BnbWithdrawalManagement({ adminKey }: BnbWithdrawalManagementPro
   }, []);
 
   const loadWalletInfo = useCallback(async () => {
-    if (!adminKey) return;
     try {
       const response = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/get-withdrawal-wallet-info`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ admin_key: adminKey }),
+          body: JSON.stringify({}),
         }
       );
       const result = await response.json();
       if (result.success) {
         setWalletInfo({
-          walletAddress: result.walletAddress,
           contractAddress: result.contractAddress,
-          walletBalanceBnb: result.walletBalanceBnb,
           contractBalanceBnb: result.contractBalanceBnb,
         });
       }
     } catch (error) {
       console.error('Error loading wallet info:', error);
     }
-  }, [adminKey]);
+  }, []);
 
   useEffect(() => {
     loadWithdrawals();
@@ -155,97 +152,6 @@ export function BnbWithdrawalManagement({ adminKey }: BnbWithdrawalManagementPro
       clearInterval(walletInterval);
     };
   }, [filter, loadWithdrawals, loadStats, loadWalletInfo]);
-
-  const handleExecute = async (withdrawal: WithdrawalRequest) => {
-    if (!adminKey) return;
-
-    setActionLoading(withdrawal.id);
-    setActionError('');
-    setActionSuccess('');
-
-    try {
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/execute-bnb-withdrawal`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-          },
-          body: JSON.stringify({
-            withdrawalId: withdrawal.id,
-          }),
-        }
-      );
-
-      const result = await response.json();
-      if (!response.ok || !result.success) {
-        throw new Error(result.error || 'Execution failed');
-      }
-
-      setActionSuccess(`Sent ${withdrawal.amount_bnb} BNB - TX: ${result.transactionHash?.slice(0, 12)}...`);
-      loadWithdrawals();
-      loadStats();
-      loadWalletInfo();
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setActionError(`Execute failed: ${msg}`);
-    } finally {
-      setActionLoading(null);
-    }
-  };
-
-  const handleBulkExecute = async () => {
-    if (!adminKey) return;
-
-    const pendingWithdrawals = withdrawals.filter(w => w.status === 'pending');
-    if (pendingWithdrawals.length === 0) return;
-
-    setBulkExecuting(true);
-    setActionError('');
-    setActionSuccess('');
-
-    let successCount = 0;
-    let failCount = 0;
-
-    for (const withdrawal of pendingWithdrawals) {
-      try {
-        const response = await fetch(
-          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/execute-bnb-withdrawal`,
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-            },
-            body: JSON.stringify({
-              withdrawalId: withdrawal.id,
-            }),
-          }
-        );
-
-        const result = await response.json();
-        if (response.ok && result.success) {
-          successCount++;
-        } else {
-          failCount++;
-        }
-      } catch {
-        failCount++;
-      }
-    }
-
-    if (successCount > 0) {
-      setActionSuccess(`Executed ${successCount} withdrawal(s) successfully${failCount > 0 ? `, ${failCount} failed` : ''}`);
-    } else {
-      setActionError(`All ${failCount} withdrawal(s) failed`);
-    }
-
-    setBulkExecuting(false);
-    loadWithdrawals();
-    loadStats();
-    loadWalletInfo();
-  };
 
   const handleRefund = async (withdrawalId: string) => {
     if (!adminKey) return;
@@ -346,111 +252,78 @@ export function BnbWithdrawalManagement({ adminKey }: BnbWithdrawalManagementPro
     }
   };
 
-  const pendingCount = withdrawals.filter(w => w.status === 'pending').length;
   const canRefund = (status: string) => ['pending', 'processing', 'failed'].includes(status);
   const canComplete = (status: string) => ['pending', 'processing'].includes(status);
-  const canExecute = (status: string) => status === 'pending';
 
   const contractBalance = walletInfo ? parseFloat(walletInfo.contractBalanceBnb) : 0;
-  const walletBalance = walletInfo ? parseFloat(walletInfo.walletBalanceBnb) : 0;
   const isLowBalance = contractBalance < 1;
-  const isLowGas = walletBalance < 0.01;
 
   return (
     <div className="space-y-6">
-      {walletInfo && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <div className={`rounded-xl bg-white border p-5 transition-all hover:shadow-md ${
-            isLowBalance ? 'border-l-4 border-l-red-400 border-t-slate-200/60 border-r-slate-200/60 border-b-slate-200/60' : 'border-slate-200/60'
-          }`}>
-            <div className="flex items-start justify-between">
-              <div>
-                <div className="flex items-center gap-2.5 mb-2">
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isLowBalance ? 'bg-red-50' : 'bg-emerald-50'}`}>
-                    <Wallet className={`w-4 h-4 ${isLowBalance ? 'text-red-500' : 'text-emerald-600'}`} />
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold text-gray-800">Contract Balance</p>
-                    {isLowBalance && (
-                      <span className="inline-flex items-center gap-1 text-[10px] text-red-600 font-medium">
-                        <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-subtlePulse" />
-                        Low balance
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <p className={`text-3xl font-bold stat-value ${isLowBalance ? 'text-red-700' : 'text-gray-900'}`}>
-                  {parseFloat(walletInfo.contractBalanceBnb).toFixed(4)} <span className="text-base font-semibold text-slate-400">BNB</span>
-                </p>
-                <div className="flex items-center gap-2 mt-3">
-                  <span className="text-xs text-slate-400 font-mono bg-slate-50 px-2 py-0.5 rounded">
-                    {walletInfo.contractAddress.slice(0, 8)}...{walletInfo.contractAddress.slice(-6)}
-                  </span>
-                  <button
-                    onClick={() => copyToClipboard(walletInfo.contractAddress)}
-                    className="text-slate-300 hover:text-slate-500 transition-colors"
-                    title="Copy contract address"
-                  >
-                    {copiedAddress ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
-                  </button>
-                  <a
-                    href={`https://bscscan.com/address/${walletInfo.contractAddress}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-slate-300 hover:text-blue-500 transition-colors"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5" />
-                  </a>
-                </div>
-              </div>
-              {isLowBalance && (
-                <div className="bg-red-50 rounded-lg px-3 py-2 text-right">
-                  <p className="text-[11px] text-red-600 font-medium leading-relaxed">Fund contract to<br />enable withdrawals</p>
-                </div>
-              )}
-            </div>
+      <div className="bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200/60 rounded-xl p-4">
+        <div className="flex items-start gap-3">
+          <div className="w-9 h-9 bg-emerald-100 rounded-lg flex items-center justify-center flex-shrink-0">
+            <Shield className="w-5 h-5 text-emerald-600" />
           </div>
+          <div>
+            <p className="text-sm font-semibold text-emerald-900">Decentralized Withdrawals Active</p>
+            <p className="text-xs text-emerald-700 mt-0.5 leading-relaxed">
+              Users withdraw directly from the smart contract by signing transactions with their own wallets.
+              The admin wallet is not used for payouts. This dashboard is read-only monitoring.
+            </p>
+          </div>
+        </div>
+      </div>
 
-          <div className={`rounded-xl bg-white border p-5 transition-all hover:shadow-md ${
-            isLowGas ? 'border-l-4 border-l-amber-400 border-t-slate-200/60 border-r-slate-200/60 border-b-slate-200/60' : 'border-slate-200/60'
-          }`}>
-            <div className="flex items-start justify-between">
-              <div>
-                <div className="flex items-center gap-2.5 mb-2">
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isLowGas ? 'bg-amber-50' : 'bg-sky-50'}`}>
-                    <Zap className={`w-4 h-4 ${isLowGas ? 'text-amber-500' : 'text-sky-600'}`} />
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold text-gray-800">Owner Wallet (Gas)</p>
-                    {isLowGas && (
-                      <span className="inline-flex items-center gap-1 text-[10px] text-amber-600 font-medium">
-                        <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-subtlePulse" />
-                        Low gas
-                      </span>
-                    )}
-                  </div>
+      {walletInfo && (
+        <div className={`rounded-xl bg-white border p-5 transition-all hover:shadow-md ${
+          isLowBalance ? 'border-l-4 border-l-red-400 border-t-slate-200/60 border-r-slate-200/60 border-b-slate-200/60' : 'border-slate-200/60'
+        }`}>
+          <div className="flex items-start justify-between">
+            <div>
+              <div className="flex items-center gap-2.5 mb-2">
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isLowBalance ? 'bg-red-50' : 'bg-emerald-50'}`}>
+                  <Wallet className={`w-4 h-4 ${isLowBalance ? 'text-red-500' : 'text-emerald-600'}`} />
                 </div>
-                <p className={`text-3xl font-bold stat-value ${isLowGas ? 'text-amber-700' : 'text-gray-900'}`}>
-                  {parseFloat(walletInfo.walletBalanceBnb).toFixed(4)} <span className="text-base font-semibold text-slate-400">BNB</span>
-                </p>
-                <div className="flex items-center gap-2 mt-3">
-                  <span className="text-xs text-slate-400 font-mono bg-slate-50 px-2 py-0.5 rounded">
-                    {walletInfo.walletAddress.slice(0, 8)}...{walletInfo.walletAddress.slice(-6)}
-                  </span>
-                  <button
-                    onClick={() => copyToClipboard(walletInfo.walletAddress)}
-                    className="text-slate-300 hover:text-slate-500 transition-colors"
-                  >
-                    <Copy className="w-3.5 h-3.5" />
-                  </button>
+                <div>
+                  <p className="text-sm font-semibold text-gray-800">Contract Treasury</p>
+                  {isLowBalance && (
+                    <span className="inline-flex items-center gap-1 text-[10px] text-red-600 font-medium">
+                      <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-subtlePulse" />
+                      Low balance
+                    </span>
+                  )}
                 </div>
               </div>
-              {isLowGas && (
-                <div className="bg-amber-50 rounded-lg px-3 py-2 text-right">
-                  <p className="text-[11px] text-amber-600 font-medium leading-relaxed">Send BNB for gas<br />to process claims</p>
-                </div>
-              )}
+              <p className={`text-3xl font-bold stat-value ${isLowBalance ? 'text-red-700' : 'text-gray-900'}`}>
+                {parseFloat(walletInfo.contractBalanceBnb).toFixed(4)} <span className="text-base font-semibold text-slate-400">BNB</span>
+              </p>
+              <div className="flex items-center gap-2 mt-3">
+                <span className="text-xs text-slate-400 font-mono bg-slate-50 px-2 py-0.5 rounded">
+                  {walletInfo.contractAddress.slice(0, 8)}...{walletInfo.contractAddress.slice(-6)}
+                </span>
+                <button
+                  onClick={() => copyToClipboard(walletInfo.contractAddress)}
+                  className="text-slate-300 hover:text-slate-500 transition-colors"
+                  title="Copy contract address"
+                >
+                  {copiedAddress ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+                </button>
+                <a
+                  href={`https://bscscan.com/address/${walletInfo.contractAddress}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-slate-300 hover:text-blue-500 transition-colors"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+              </div>
             </div>
+            {isLowBalance && (
+              <div className="bg-red-50 rounded-lg px-3 py-2 text-right">
+                <p className="text-[11px] text-red-600 font-medium leading-relaxed">Fund contract to<br />enable withdrawals</p>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -464,9 +337,9 @@ export function BnbWithdrawalManagement({ adminKey }: BnbWithdrawalManagementPro
             <div className="flex-1">
               <h3 className="text-lg font-bold text-red-900 mb-2">Contract Needs Funding</h3>
               <p className="text-sm text-red-700 mb-4 leading-relaxed">
-                The withdrawal contract has {contractBalance.toFixed(4)} BNB remaining.
-                {stats && stats.pending_amount > 0 && ` There are ${stats.pending_amount.toFixed(4)} BNB in pending withdrawals.`}
-                {' '}Send BNB to the contract address to enable user withdrawals.
+                The contract has {contractBalance.toFixed(4)} BNB remaining.
+                Users will not be able to withdraw until the contract is funded.
+                Send BNB directly to the contract address.
               </p>
               <div className="bg-white/80 rounded-lg border border-red-200/40 p-4 space-y-3">
                 <div>
@@ -482,18 +355,6 @@ export function BnbWithdrawalManagement({ adminKey }: BnbWithdrawalManagementPro
                       {copiedAddress ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                       {copiedAddress ? 'Copied!' : 'Copy'}
                     </button>
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-red-50/30 rounded-lg p-3 border border-red-200/30">
-                    <p className="text-[10px] font-semibold text-red-900 uppercase tracking-wider mb-1">Recommended</p>
-                    <p className="text-lg font-bold text-red-900">10-20 BNB</p>
-                    <p className="text-[10px] text-red-600 mt-0.5">For operations</p>
-                  </div>
-                  <div className="bg-amber-50/30 rounded-lg p-3 border border-amber-200/30">
-                    <p className="text-[10px] font-semibold text-amber-900 uppercase tracking-wider mb-1">Minimum</p>
-                    <p className="text-lg font-bold text-amber-900">1 BNB</p>
-                    <p className="text-[10px] text-amber-600 mt-0.5">To resume</p>
                   </div>
                 </div>
                 <a
@@ -517,6 +378,7 @@ export function BnbWithdrawalManagement({ adminKey }: BnbWithdrawalManagementPro
             { label: 'Today', value: stats.total_withdrawn_today.toFixed(4), sub: `BNB / ${stats.completed_today} txns`, dot: 'bg-teal-400' },
             { label: 'This Week', value: stats.total_withdrawn_week.toFixed(4), sub: 'BNB withdrawn', dot: 'bg-blue-400' },
             { label: 'All Time', value: stats.total_withdrawn_all_time.toFixed(4), sub: 'BNB withdrawn', dot: 'bg-slate-400' },
+            { label: 'User Withdrawals', value: String(stats.user_withdrawals_today || 0), sub: 'direct today', dot: 'bg-emerald-400' },
           ].map(({ label, value, sub, dot }) => (
             <div key={label} className="bg-white rounded-xl border border-slate-200/60 p-4 hover:shadow-sm transition-shadow">
               <div className="flex items-center gap-1.5 mb-1">
@@ -527,18 +389,6 @@ export function BnbWithdrawalManagement({ adminKey }: BnbWithdrawalManagementPro
               <p className="text-[11px] text-slate-400 mt-0.5">{sub}</p>
             </div>
           ))}
-          <div className={`rounded-xl border p-4 transition-shadow hover:shadow-sm ${
-            stats.pending_count > 0 ? 'bg-amber-50/50 border-amber-200/60' : 'bg-white border-slate-200/60'
-          }`}>
-            <div className="flex items-center gap-1.5 mb-1">
-              <span className={`w-1.5 h-1.5 rounded-full ${stats.pending_count > 0 ? 'bg-amber-400 animate-subtlePulse' : 'bg-slate-300'}`} />
-              <p className="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Pending</p>
-            </div>
-            <p className={`text-xl font-bold stat-value ${stats.pending_count > 0 ? 'text-amber-700' : 'text-gray-900'}`}>
-              {stats.pending_count}
-            </p>
-            <p className="text-[11px] text-slate-400 mt-0.5">{stats.pending_amount.toFixed(4)} BNB queued</p>
-          </div>
         </div>
       )}
 
@@ -570,7 +420,7 @@ export function BnbWithdrawalManagement({ adminKey }: BnbWithdrawalManagementPro
               <p className="text-xs text-slate-400 mt-0.5">Enter the transaction hash for manual completion</p>
             </div>
             <div className="p-6">
-              <div className="bg-slate-50 rounded-xl p-4 mb-5 border-l-3 border-l-slate-300">
+              <div className="bg-slate-50 rounded-xl p-4 mb-5">
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <p className="text-[10px] text-slate-400 uppercase tracking-wider mb-0.5">Wallet</p>
@@ -583,15 +433,13 @@ export function BnbWithdrawalManagement({ adminKey }: BnbWithdrawalManagementPro
                 </div>
               </div>
               <label className="block text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">Transaction Hash</label>
-              <div className="relative">
-                <input
-                  type="text"
-                  value={txHashInput}
-                  onChange={(e) => setTxHashInput(e.target.value)}
-                  placeholder="0x..."
-                  className="w-full pl-4 pr-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-slate-900/10 focus:border-slate-400 font-mono text-sm transition-all outline-none"
-                />
-              </div>
+              <input
+                type="text"
+                value={txHashInput}
+                onChange={(e) => setTxHashInput(e.target.value)}
+                placeholder="0x..."
+                className="w-full pl-4 pr-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-slate-900/10 focus:border-slate-400 font-mono text-sm transition-all outline-none"
+              />
               <div className="flex gap-3 mt-5">
                 <button
                   onClick={() => { setCompleteModal(null); setTxHashInput(''); setActionError(''); }}
@@ -625,35 +473,18 @@ export function BnbWithdrawalManagement({ adminKey }: BnbWithdrawalManagementPro
                 <ArrowDownCircle className="w-5 h-5 text-white" />
               </div>
               <div>
-                <h2 className="text-lg font-bold text-gray-900 tracking-tight">Withdrawal Requests</h2>
-                <p className="text-xs text-slate-400">{withdrawals.length} total requests</p>
+                <h2 className="text-lg font-bold text-gray-900 tracking-tight">Withdrawal History</h2>
+                <p className="text-xs text-slate-400">{withdrawals.length} records</p>
               </div>
             </div>
 
-            <div className="flex items-center gap-2 flex-wrap">
-              {adminKey && pendingCount > 0 && (
-                <button
-                  onClick={handleBulkExecute}
-                  disabled={bulkExecuting}
-                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 disabled:bg-slate-400 text-white rounded-xl text-sm font-medium transition-all flex items-center gap-2 shadow-sm"
-                >
-                  {bulkExecuting ? (
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Send className="w-4 h-4" />
-                  )}
-                  Execute All
-                  <span className="bg-white/20 px-1.5 py-0.5 rounded-md text-[11px]">{pendingCount}</span>
-                </button>
-              )}
-              <button
-                onClick={() => { loadWithdrawals(); loadStats(); loadWalletInfo(); }}
-                className="w-9 h-9 flex items-center justify-center hover:bg-slate-100 rounded-xl transition-colors"
-                title="Refresh"
-              >
-                <RefreshCw className="w-4 h-4 text-slate-400" />
-              </button>
-            </div>
+            <button
+              onClick={() => { loadWithdrawals(); loadStats(); loadWalletInfo(); }}
+              className="w-9 h-9 flex items-center justify-center hover:bg-slate-100 rounded-xl transition-colors"
+              title="Refresh"
+            >
+              <RefreshCw className="w-4 h-4 text-slate-400" />
+            </button>
           </div>
 
           <div className="flex gap-1 mt-4 overflow-x-auto pb-1 bg-slate-100 rounded-xl p-1">
@@ -687,18 +518,19 @@ export function BnbWithdrawalManagement({ adminKey }: BnbWithdrawalManagementPro
             <div className="w-12 h-12 bg-slate-100 rounded-2xl flex items-center justify-center mx-auto mb-3">
               <TrendingDown className="w-6 h-6 text-slate-300" />
             </div>
-            <p className="text-slate-400 text-sm">No withdrawal requests found</p>
+            <p className="text-slate-400 text-sm">No withdrawal records found</p>
           </div>
         ) : (
           <div className="divide-y divide-slate-100">
             {withdrawals.map((withdrawal) => {
               const config = STATUS_CONFIG[withdrawal.status] || STATUS_CONFIG.pending;
               const isActionTarget = actionLoading === withdrawal.id;
+              const isUserWithdrawal = withdrawal.source === 'user';
 
               return (
                 <div
                   key={withdrawal.id}
-                  className={`p-4 hover:bg-slate-50/50 transition-all status-accent-${withdrawal.status} ${isActionTarget ? 'bg-blue-50/20' : ''}`}
+                  className={`p-4 hover:bg-slate-50/50 transition-all ${isActionTarget ? 'bg-blue-50/20' : ''}`}
                 >
                   <div className="flex flex-col sm:flex-row sm:items-start gap-3">
                     <div className="flex-1 min-w-0 overflow-hidden">
@@ -710,9 +542,17 @@ export function BnbWithdrawalManagement({ adminKey }: BnbWithdrawalManagementPro
                         <span className="text-lg font-bold text-gray-900 stat-value">
                           {withdrawal.amount_bnb.toFixed(4)} BNB
                         </span>
-                        <span className="text-[11px] text-slate-400">
-                          ({withdrawal.amount_credits.toLocaleString()} credits)
-                        </span>
+                        {isUserWithdrawal && (
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-emerald-50 text-emerald-700">
+                            <Shield className="w-3 h-3" />
+                            USER
+                          </span>
+                        )}
+                        {!isUserWithdrawal && withdrawal.source === 'admin' && (
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 text-slate-500">
+                            LEGACY
+                          </span>
+                        )}
                       </div>
 
                       <div className="flex items-center gap-2 sm:gap-3 text-xs text-slate-500 mb-1 flex-wrap">
@@ -750,21 +590,6 @@ export function BnbWithdrawalManagement({ adminKey }: BnbWithdrawalManagementPro
 
                     {adminKey && (
                       <div className="flex items-center gap-1.5 flex-shrink-0">
-                        {canExecute(withdrawal.status) && (
-                          <button
-                            onClick={() => handleExecute(withdrawal)}
-                            disabled={isActionTarget}
-                            className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 disabled:bg-slate-300 text-white rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 shadow-sm"
-                            title="Execute withdrawal on-chain"
-                          >
-                            {isActionTarget ? (
-                              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                            ) : (
-                              <Send className="w-3.5 h-3.5" />
-                            )}
-                            Execute
-                          </button>
-                        )}
                         {canComplete(withdrawal.status) && (
                           <button
                             onClick={() => setCompleteModal({ id: withdrawal.id, wallet: withdrawal.wallet_address, amount: withdrawal.amount_bnb })}

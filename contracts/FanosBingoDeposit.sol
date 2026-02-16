@@ -3,11 +3,21 @@ pragma solidity ^0.8.20;
 
 contract FanosBingoDeposit {
     address public owner;
-    uint256 public conversionRate; // Rate: 1 BNB = X game credits (scaled by 1e18)
-    uint256 public minimumDeposit; // Minimum deposit in wei
+    uint256 public conversionRate;
+    uint256 public minimumDeposit;
+
+    uint256 public minWithdraw;
+    uint256 public maxDaily;
+    uint256 public maxWeekly;
 
     mapping(address => uint256) public totalDeposited;
     mapping(address => string) public walletToUserId;
+    mapping(address => uint256) public credits;
+
+    mapping(address => uint256) public dailyWithdrawn;
+    mapping(address => uint256) public weeklyWithdrawn;
+    mapping(address => uint256) public lastDailyReset;
+    mapping(address => uint256) public lastWeeklyReset;
 
     event Deposit(
         address indexed depositor,
@@ -23,6 +33,19 @@ contract FanosBingoDeposit {
         uint256 timestamp
     );
 
+    event UserWithdrawal(
+        address indexed user,
+        uint256 amount,
+        uint256 timestamp
+    );
+
+    event WinCreditsAdded(
+        address indexed user,
+        uint256 amount,
+        uint256 newBalance,
+        uint256 timestamp
+    );
+
     event ConversionRateUpdated(
         uint256 oldRate,
         uint256 newRate,
@@ -35,6 +58,13 @@ contract FanosBingoDeposit {
         uint256 timestamp
     );
 
+    event WithdrawalLimitsUpdated(
+        uint256 minWithdraw,
+        uint256 maxDaily,
+        uint256 maxWeekly,
+        uint256 timestamp
+    );
+
     modifier onlyOwner() {
         require(msg.sender == owner, "Only owner can call this function");
         _;
@@ -42,30 +72,24 @@ contract FanosBingoDeposit {
 
     constructor(uint256 _conversionRate, uint256 _minimumDeposit) {
         owner = msg.sender;
-        conversionRate = _conversionRate; // e.g., 100000 * 1e18 means 1 BNB = 100,000 credits
-        minimumDeposit = _minimumDeposit; // e.g., 0.001 BNB = 1000000000000000 wei
+        conversionRate = _conversionRate;
+        minimumDeposit = _minimumDeposit;
+        minWithdraw = 0.01 ether;
+        maxDaily = 5 ether;
+        maxWeekly = 10 ether;
     }
 
-    /**
-     * @notice Deposit BNB to get game credits
-     * @param userId The Telegram user ID to credit
-     */
     function deposit(string memory userId) external payable {
         require(msg.value >= minimumDeposit, "Deposit amount too small");
         require(bytes(userId).length > 0, "User ID required");
 
-        // Store or update user ID mapping
         if (bytes(walletToUserId[msg.sender]).length == 0) {
             walletToUserId[msg.sender] = userId;
         }
 
-        // Calculate game credits
         uint256 gameCredits = (msg.value * conversionRate) / 1e18;
-
-        // Update total deposited
         totalDeposited[msg.sender] += msg.value;
 
-        // Emit deposit event
         emit Deposit(
             msg.sender,
             msg.value,
@@ -75,11 +99,64 @@ contract FanosBingoDeposit {
         );
     }
 
-    /**
-     * @notice Owner can withdraw BNB to any address (used for player withdrawals)
-     * @param recipient Address to send BNB to
-     * @param amount Amount to withdraw in wei
-     */
+    function addWinCredits(address user, uint256 amount) external onlyOwner {
+        require(user != address(0), "Invalid user address");
+        require(amount > 0, "Amount must be greater than 0");
+
+        credits[user] += amount;
+
+        emit WinCreditsAdded(user, amount, credits[user], block.timestamp);
+    }
+
+    function withdraw(uint256 amount) external {
+        require(amount >= minWithdraw, "Below minimum withdrawal");
+        require(credits[msg.sender] >= amount, "Insufficient credits");
+        require(address(this).balance >= amount, "Insufficient contract balance");
+
+        _resetLimitsIfNeeded(msg.sender);
+
+        require(dailyWithdrawn[msg.sender] + amount <= maxDaily, "Daily limit exceeded");
+        require(weeklyWithdrawn[msg.sender] + amount <= maxWeekly, "Weekly limit exceeded");
+
+        credits[msg.sender] -= amount;
+        dailyWithdrawn[msg.sender] += amount;
+        weeklyWithdrawn[msg.sender] += amount;
+
+        (bool success, ) = msg.sender.call{value: amount}("");
+        require(success, "Transfer failed");
+
+        emit UserWithdrawal(msg.sender, amount, block.timestamp);
+    }
+
+    function _resetLimitsIfNeeded(address user) internal {
+        if (block.timestamp >= lastDailyReset[user] + 1 days) {
+            dailyWithdrawn[user] = 0;
+            lastDailyReset[user] = block.timestamp;
+        }
+        if (block.timestamp >= lastWeeklyReset[user] + 7 days) {
+            weeklyWithdrawn[user] = 0;
+            lastWeeklyReset[user] = block.timestamp;
+        }
+    }
+
+    function getRemainingLimits(address user) external view returns (
+        uint256 dailyRemaining,
+        uint256 weeklyRemaining
+    ) {
+        uint256 currentDaily = dailyWithdrawn[user];
+        uint256 currentWeekly = weeklyWithdrawn[user];
+
+        if (block.timestamp >= lastDailyReset[user] + 1 days) {
+            currentDaily = 0;
+        }
+        if (block.timestamp >= lastWeeklyReset[user] + 7 days) {
+            currentWeekly = 0;
+        }
+
+        dailyRemaining = maxDaily > currentDaily ? maxDaily - currentDaily : 0;
+        weeklyRemaining = maxWeekly > currentWeekly ? maxWeekly - currentWeekly : 0;
+    }
+
     function withdrawTo(address payable recipient, uint256 amount) external onlyOwner {
         require(recipient != address(0), "Invalid recipient");
         require(amount <= address(this).balance, "Insufficient contract balance");
@@ -90,22 +167,6 @@ contract FanosBingoDeposit {
         emit Withdrawal(recipient, amount, block.timestamp);
     }
 
-    /**
-     * @notice Owner can withdraw collected BNB to own address
-     * @param amount Amount to withdraw in wei
-     */
-    function withdraw(uint256 amount) external onlyOwner {
-        require(amount <= address(this).balance, "Insufficient contract balance");
-
-        (bool success, ) = owner.call{value: amount}("");
-        require(success, "Withdrawal failed");
-
-        emit Withdrawal(owner, amount, block.timestamp);
-    }
-
-    /**
-     * @notice Owner can withdraw all BNB to own address
-     */
     function withdrawAll() external onlyOwner {
         uint256 balance = address(this).balance;
         require(balance > 0, "No balance to withdraw");
@@ -116,10 +177,25 @@ contract FanosBingoDeposit {
         emit Withdrawal(owner, balance, block.timestamp);
     }
 
-    /**
-     * @notice Update conversion rate
-     * @param newRate New conversion rate (scaled by 1e18)
-     */
+    function setWithdrawalLimits(
+        uint256 _minWithdraw,
+        uint256 _maxDaily,
+        uint256 _maxWeekly
+    ) external onlyOwner {
+        require(_maxDaily > 0 && _maxWeekly > 0, "Limits must be greater than 0");
+        require(_maxWeekly >= _maxDaily, "Weekly limit must be >= daily limit");
+
+        minWithdraw = _minWithdraw;
+        maxDaily = _maxDaily;
+        maxWeekly = _maxWeekly;
+
+        emit WithdrawalLimitsUpdated(_minWithdraw, _maxDaily, _maxWeekly, block.timestamp);
+    }
+
+    function getContractBalance() external view returns (uint256) {
+        return address(this).balance;
+    }
+
     function updateConversionRate(uint256 newRate) external onlyOwner {
         require(newRate > 0, "Rate must be greater than 0");
 
@@ -129,10 +205,6 @@ contract FanosBingoDeposit {
         emit ConversionRateUpdated(oldRate, newRate, block.timestamp);
     }
 
-    /**
-     * @notice Update minimum deposit
-     * @param newMinimum New minimum deposit in wei
-     */
     function updateMinimumDeposit(uint256 newMinimum) external onlyOwner {
         uint256 oldMinimum = minimumDeposit;
         minimumDeposit = newMinimum;
@@ -140,33 +212,22 @@ contract FanosBingoDeposit {
         emit MinimumDepositUpdated(oldMinimum, newMinimum, block.timestamp);
     }
 
-    /**
-     * @notice Transfer ownership
-     * @param newOwner Address of new owner
-     */
     function transferOwnership(address newOwner) external onlyOwner {
         require(newOwner != address(0), "Invalid new owner");
         owner = newOwner;
     }
 
-    /**
-     * @notice Get contract balance
-     */
     function getBalance() external view returns (uint256) {
         return address(this).balance;
     }
 
-    /**
-     * @notice Get user ID for a wallet address
-     */
     function getUserId(address wallet) external view returns (string memory) {
         return walletToUserId[wallet];
     }
 
-    /**
-     * @notice Calculate game credits for a BNB amount
-     */
     function calculateGameCredits(uint256 bnbAmount) external view returns (uint256) {
         return (bnbAmount * conversionRate) / 1e18;
     }
+
+    receive() external payable {}
 }

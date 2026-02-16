@@ -3,20 +3,16 @@ import { WagmiAdapter } from '@reown/appkit-adapter-wagmi'
 import { bsc } from 'viem/chains'
 import { QueryClient } from '@tanstack/react-query'
 
-// 1. Get projectId from environment or use default
 const projectId = import.meta.env.VITE_REOWN_PROJECT_ID || 'YOUR_PROJECT_ID'
 
-// 2. Set up Wagmi adapter with BSC chains
 export const wagmiAdapter = new WagmiAdapter({
   networks: [bsc],
   projectId,
   ssr: false
 })
 
-// 3. Create QueryClient
 export const queryClient = new QueryClient()
 
-// 4. Create AppKit instance
 export const modal = createAppKit({
   adapters: [wagmiAdapter],
   networks: [bsc],
@@ -34,7 +30,6 @@ export const modal = createAppKit({
 
 export const config = wagmiAdapter.wagmiConfig
 
-// Contract ABI for FanosBingoDeposit
 export const DEPOSIT_CONTRACT_ABI = [
   {
     "inputs": [{"internalType": "address", "name": "user", "type": "address"}, {"internalType": "uint256", "name": "amount", "type": "uint256"}],
@@ -44,15 +39,8 @@ export const DEPOSIT_CONTRACT_ABI = [
     "type": "function"
   },
   {
-    "inputs": [{"internalType": "uint256", "name": "amountBNB", "type": "uint256"}],
+    "inputs": [{"internalType": "uint256", "name": "amount", "type": "uint256"}],
     "name": "withdraw",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [{"internalType": "address", "name": "to", "type": "address"}, {"internalType": "uint256", "name": "amountBNB", "type": "uint256"}],
-    "name": "withdrawTo",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
@@ -90,6 +78,37 @@ export const DEPOSIT_CONTRACT_ABI = [
     "name": "maxWeekly",
     "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
     "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{"internalType": "address", "name": "user", "type": "address"}],
+    "name": "getRemainingLimits",
+    "outputs": [
+      {"internalType": "uint256", "name": "dailyRemaining", "type": "uint256"},
+      {"internalType": "uint256", "name": "weeklyRemaining", "type": "uint256"}
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{"internalType": "address", "name": "", "type": "address"}],
+    "name": "dailyWithdrawn",
+    "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{"internalType": "address", "name": "", "type": "address"}],
+    "name": "weeklyWithdrawn",
+    "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{"internalType": "string", "name": "userId", "type": "string"}],
+    "name": "deposit",
+    "outputs": [],
+    "stateMutability": "payable",
     "type": "function"
   }
 ] as const

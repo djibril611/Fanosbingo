@@ -23,11 +23,7 @@ Deno.serve(async (req: Request) => {
     const { data: settings } = await supabaseClient
       .from("settings")
       .select("id, value")
-      .in("id", [
-        "deposit_contract_address",
-        "deposit_contract_private_key",
-        "deposit_bsc_rpc_url",
-      ]);
+      .in("id", ["deposit_contract_address", "deposit_bsc_rpc_url"]);
 
     if (!settings || settings.length === 0) {
       throw new Error("Settings not configured");
@@ -36,41 +32,25 @@ Deno.serve(async (req: Request) => {
     const contractAddress = settings.find(
       (s: { id: string }) => s.id === "deposit_contract_address"
     )?.value;
-    const privateKey = settings.find(
-      (s: { id: string }) => s.id === "deposit_contract_private_key"
-    )?.value;
     const rpcUrl = settings.find(
       (s: { id: string }) => s.id === "deposit_bsc_rpc_url"
     )?.value;
 
-    if (!privateKey || !rpcUrl || !contractAddress) {
-      throw new Error(
-        "Private key, contract address, or RPC URL not configured"
-      );
+    if (!rpcUrl || !contractAddress) {
+      throw new Error("Contract address or RPC URL not configured");
     }
 
     const provider = new ethers.JsonRpcProvider(rpcUrl);
-    const wallet = new ethers.Wallet(privateKey, provider);
-
-    const [walletBalance, contractBalance] = await Promise.all([
-      provider.getBalance(wallet.address),
-      provider.getBalance(contractAddress),
-    ]);
-
-    const walletBnb = ethers.formatEther(walletBalance);
+    const contractBalance = await provider.getBalance(contractAddress);
     const contractBnb = ethers.formatEther(contractBalance);
-    const totalBnb = ethers.formatEther(walletBalance + contractBalance);
 
     return new Response(
       JSON.stringify({
         success: true,
-        walletAddress: wallet.address,
         contractAddress,
-        walletBalanceBnb: walletBnb,
         contractBalanceBnb: contractBnb,
-        totalAvailableBnb: totalBnb,
         network: "BSC Mainnet (Chain ID: 56)",
-        message: `Contract: ${contractBnb} BNB | Wallet: ${walletBnb} BNB | Total: ${totalBnb} BNB`,
+        message: `Contract: ${contractBnb} BNB`,
       }),
       {
         status: 200,

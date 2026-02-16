@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
   X, Wallet, AlertCircle, CheckCircle, Loader2,
-  ExternalLink, ArrowRight, ArrowDown, Shield, Clock
+  ExternalLink, ArrowRight, ArrowDown, Shield, Clock, Info
 } from 'lucide-react';
 import { useAccount, useWriteContract, useReadContract, useWaitForTransactionReceipt } from 'wagmi';
 import { parseEther, formatEther } from 'viem';
@@ -45,6 +45,7 @@ export function BnbWithdrawalModal({
     transaction_hash: string | null;
   }>>([]);
   const [contractBalance, setContractBalance] = useState<bigint>(0n);
+  const [recordingWithdrawal, setRecordingWithdrawal] = useState(false);
 
   const { data: creditsData, refetch: refetchCredits } = useReadContract({
     address: contractAddress as `0x${string}`,
@@ -67,6 +68,26 @@ export function BnbWithdrawalModal({
     }
   });
 
+  const { data: remainingLimitsData } = useReadContract({
+    address: contractAddress as `0x${string}`,
+    abi: DEPOSIT_CONTRACT_ABI,
+    functionName: 'getRemainingLimits',
+    args: address ? [address] : undefined,
+    query: {
+      enabled: !!address && !!contractAddress && isOpen,
+      refetchInterval: 10000,
+    }
+  });
+
+  const { data: minWithdrawData } = useReadContract({
+    address: contractAddress as `0x${string}`,
+    abi: DEPOSIT_CONTRACT_ABI,
+    functionName: 'minWithdraw',
+    query: {
+      enabled: !!contractAddress && isOpen,
+    }
+  });
+
   const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({
     hash,
   });
@@ -81,11 +102,13 @@ export function BnbWithdrawalModal({
       setSuccess('');
       setIsLoading(false);
       setIsClaiming(false);
+      setRecordingWithdrawal(false);
     } else {
       setError('');
       setSuccess('');
       setIsLoading(false);
       setIsClaiming(false);
+      setRecordingWithdrawal(false);
     }
   }, [isOpen]);
 
@@ -110,27 +133,70 @@ export function BnbWithdrawalModal({
   }, [onChainCredits, wonBalance]);
 
   useEffect(() => {
-    if (isConfirmed && hash) {
-      setSuccess('BNB sent to your wallet!');
-      setIsLoading(false);
-      loadRecentHistory();
-      refetchCredits();
-      refetchContractBalance();
-
-      setTimeout(() => {
-        if (onSuccess) onSuccess();
-        onClose();
-      }, 3000);
+    if (isConfirmed && hash && !recordingWithdrawal) {
+      setRecordingWithdrawal(true);
+      recordWithdrawalToDatabase(hash);
     }
   }, [isConfirmed, hash]);
 
   useEffect(() => {
     if (writeError) {
       const msg = writeError.message || 'Transaction failed';
-      setError(msg.length > 120 ? msg.slice(0, 120) + '...' : msg);
+      if (msg.includes('User rejected') || msg.includes('user rejected')) {
+        setError('Transaction cancelled');
+      } else if (msg.includes('insufficient funds')) {
+        setError('Insufficient BNB for gas fees (~0.001 BNB required)');
+      } else if (msg.includes('Daily limit')) {
+        setError('Daily withdrawal limit exceeded');
+      } else if (msg.includes('Weekly limit')) {
+        setError('Weekly withdrawal limit exceeded');
+      } else if (msg.includes('Below minimum')) {
+        setError('Amount below minimum withdrawal');
+      } else if (msg.includes('Insufficient credits')) {
+        setError('Insufficient on-chain credits');
+      } else if (msg.includes('Insufficient contract')) {
+        setError('Contract balance too low. Try again later.');
+      } else {
+        setError(msg.length > 120 ? msg.slice(0, 120) + '...' : msg);
+      }
       setIsLoading(false);
     }
   }, [writeError]);
+
+  const recordWithdrawalToDatabase = async (txHash: string) => {
+    try {
+      const amountBnb = Number(amount);
+      await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/record-withdrawal`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            telegramUserId,
+            walletAddress: address,
+            amountBnb,
+            transactionHash: txHash,
+          }),
+        }
+      );
+    } catch (err) {
+      console.error('Failed to record withdrawal:', err);
+    }
+
+    setSuccess('BNB sent to your wallet!');
+    setIsLoading(false);
+    loadRecentHistory();
+    refetchCredits();
+    refetchContractBalance();
+
+    setTimeout(() => {
+      if (onSuccess) onSuccess();
+      onClose();
+    }, 3000);
+  };
 
   const loadContractAddress = async () => {
     try {
@@ -248,8 +314,9 @@ export function BnbWithdrawalModal({
       return;
     }
 
-    if (amountNum < 0.1) {
-      setError('Minimum withdrawal is 0.1 BNB');
+    const minBnb = minWithdrawData ? Number(formatEther(minWithdrawData as bigint)) : 0.01;
+    if (amountNum < minBnb) {
+      setError(`Minimum withdrawal is ${minBnb} BNB`);
       return;
     }
 
@@ -259,21 +326,19 @@ export function BnbWithdrawalModal({
       return;
     }
 
-    // Balance check disabled - let the contract handle insufficient funds on-chain
-
     setIsLoading(true);
 
     try {
       await writeContractAsync({
         address: contractAddress as `0x${string}`,
         abi: DEPOSIT_CONTRACT_ABI,
-        functionName: 'withdrawTo',
-        args: [address, amountWei],
+        functionName: 'withdraw',
+        args: [amountWei],
       });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('User rejected') || msg.includes('user rejected')) {
-        setError('Transaction cancelled by user');
+        setError('Transaction cancelled');
       } else if (msg.includes('insufficient funds')) {
         setError('Insufficient BNB for gas fees (~0.001 BNB required)');
       } else {
@@ -285,7 +350,18 @@ export function BnbWithdrawalModal({
 
   const setMaxAmount = () => {
     const available = getAvailableBnb();
-    setAmount(available > 0 ? available.toFixed(4) : '0');
+    const limits = getRemainingLimitsBnb();
+    const maxAllowed = Math.min(available, limits.daily, limits.weekly);
+    setAmount(maxAllowed > 0 ? maxAllowed.toFixed(4) : '0');
+  };
+
+  const getRemainingLimitsBnb = () => {
+    if (!remainingLimitsData) return { daily: 5, weekly: 10 };
+    const [dailyRemaining, weeklyRemaining] = remainingLimitsData as [bigint, bigint];
+    return {
+      daily: Number(formatEther(dailyRemaining)),
+      weekly: Number(formatEther(weeklyRemaining)),
+    };
   };
 
   if (!isOpen) return null;
@@ -296,6 +372,8 @@ export function BnbWithdrawalModal({
   const hasOnChain = onChainCredits > 0n;
   const contractBalanceBnb = Number(formatEther(contractBalance));
   const hasLowContractBalance = contractBalanceBnb < 1 && contractBalanceBnb > 0;
+  const limits = getRemainingLimitsBnb();
+  const minBnb = minWithdrawData ? Number(formatEther(minWithdrawData as bigint)) : 0.01;
 
   const statusBadge = (status: string) => {
     const map: Record<string, string> = {
@@ -318,7 +396,7 @@ export function BnbWithdrawalModal({
             </div>
             <div>
               <h2 className="text-lg font-bold text-white tracking-tight">Withdraw BNB</h2>
-              <p className="text-[11px] text-gray-500">Two-step withdrawal process</p>
+              <p className="text-[11px] text-gray-500">Decentralized - you sign all transactions</p>
             </div>
           </div>
           <button
@@ -469,8 +547,8 @@ export function BnbWithdrawalModal({
                         <Wallet className="w-4 h-4 text-yellow-400" />
                       </div>
                       <div>
-                        <p className="text-sm font-semibold text-white">Withdraw to Wallet</p>
-                        <p className="text-[11px] text-gray-500">You pay gas (~0.001 BNB)</p>
+                        <p className="text-sm font-semibold text-white">Withdraw to Your Wallet</p>
+                        <p className="text-[11px] text-gray-500">You sign this transaction directly</p>
                       </div>
                     </div>
 
@@ -484,9 +562,9 @@ export function BnbWithdrawalModal({
                                 type="number"
                                 value={amount}
                                 onChange={(e) => setAmount(e.target.value)}
-                                placeholder="Min: 0.1 BNB"
+                                placeholder={`Min: ${minBnb} BNB`}
                                 step="0.001"
-                                min={0.1}
+                                min={minBnb}
                                 className="w-full px-3.5 py-2.5 bg-gray-900/50 border border-gray-700/50 rounded-xl text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-yellow-500/30 focus:border-yellow-500/30 text-sm transition-all"
                               />
                               <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-gray-600 font-medium">BNB</span>
@@ -500,9 +578,21 @@ export function BnbWithdrawalModal({
                           </div>
                         </div>
 
-                        <div className="flex items-center justify-between bg-gray-900/40 rounded-lg p-3 mb-3 border border-gray-800/50">
-                          <span className="text-gray-400 text-[11px]">Available on-chain</span>
-                          <span className="text-emerald-400 font-semibold stat-value">{onChainBnb.toFixed(4)} BNB</span>
+                        <div className="space-y-2 mb-3">
+                          <div className="flex items-center justify-between bg-gray-900/40 rounded-lg p-3 border border-gray-800/50">
+                            <span className="text-gray-400 text-[11px]">Available on-chain</span>
+                            <span className="text-emerald-400 font-semibold stat-value">{onChainBnb.toFixed(4)} BNB</span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="bg-gray-900/40 rounded-lg p-2.5 border border-gray-800/50">
+                              <p className="text-[10px] text-gray-500 mb-0.5">Daily remaining</p>
+                              <p className="text-sm font-semibold text-gray-300 stat-value">{limits.daily.toFixed(2)} BNB</p>
+                            </div>
+                            <div className="bg-gray-900/40 rounded-lg p-2.5 border border-gray-800/50">
+                              <p className="text-[10px] text-gray-500 mb-0.5">Weekly remaining</p>
+                              <p className="text-sm font-semibold text-gray-300 stat-value">{limits.weekly.toFixed(2)} BNB</p>
+                            </div>
+                          </div>
                         </div>
 
                         {hasLowContractBalance && (
@@ -512,7 +602,7 @@ export function BnbWithdrawalModal({
                               <div>
                                 <p className="text-amber-400 text-xs font-semibold mb-1">Low Contract Balance</p>
                                 <p className="text-amber-300/70 text-[11px] leading-relaxed">
-                                  Contract balance: {contractBalanceBnb.toFixed(4)} BNB. Large withdrawals may fail. Contact support if needed.
+                                  Contract balance: {contractBalanceBnb.toFixed(4)} BNB. Large withdrawals may fail.
                                 </p>
                               </div>
                             </div>
@@ -527,7 +617,7 @@ export function BnbWithdrawalModal({
                           {isLoading || isPending || isConfirming ? (
                             <>
                               <Loader2 className="w-4 h-4 animate-spin" />
-                              {isConfirming ? 'Confirming...' : 'Processing...'}
+                              {isConfirming ? 'Confirming...' : 'Sign in Wallet...'}
                             </>
                           ) : (
                             <>
@@ -552,11 +642,12 @@ export function BnbWithdrawalModal({
                     )}
                   </div>
 
-                  <div className="bg-amber-500/5 border border-amber-500/8 rounded-xl p-3">
+                  <div className="bg-emerald-500/5 border border-emerald-500/8 rounded-xl p-3">
                     <div className="flex gap-2.5">
-                      <AlertCircle className="w-4 h-4 text-amber-400/70 flex-shrink-0 mt-0.5" />
-                      <p className="text-amber-300/60 text-xs leading-relaxed">
-                        This transaction is sent from your wallet. Make sure you have enough BNB for gas fees (~0.001 BNB).
+                      <Info className="w-4 h-4 text-emerald-400/70 flex-shrink-0 mt-0.5" />
+                      <p className="text-emerald-300/60 text-xs leading-relaxed">
+                        You sign this transaction with your wallet. The smart contract sends BNB directly to you.
+                        No admin involvement. Gas fee ~0.001 BNB.
                       </p>
                     </div>
                   </div>

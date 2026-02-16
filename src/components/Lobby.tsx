@@ -644,7 +644,9 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
 
       const errorMessage = error instanceof Error ? error.message : '';
 
-      if (errorMessage.includes('SELECTION_CLOSED') || errorMessage.includes('Selection window has closed')) {
+      if (errorMessage.includes('TELEGRAM_REQUIRED') || errorMessage.includes('Telegram connection required')) {
+        addToast('Telegram connection required to play. Please open the game through the Telegram bot.', 'error');
+      } else if (errorMessage.includes('SELECTION_CLOSED') || errorMessage.includes('Selection window has closed')) {
         addToast('Selection window has closed. Game is starting!', 'error');
       } else if (errorMessage.includes('duplicate') || errorMessage.includes('already been taken') || errorMessage.includes('CARD_TAKEN')) {
         addToast('That card was just taken! Please choose another.', 'info');
@@ -889,12 +891,39 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
         {/* Warning Messages */}
         {!telegramUser && !isWalletConnected && (
           <div className={`border-l-4 p-3 mb-3 rounded transition-colors duration-300 ${isDarkMode ? 'bg-blue-900/20 border-blue-600 text-blue-300' : 'bg-blue-50 border-blue-400 text-blue-800'}`}>
-            <p className="text-sm font-semibold mb-2">Connect Your BNB Wallet to Make Deposits</p>
-            <p className="text-xs mb-2 opacity-90">Deposit BNB to credit your account. For playing games, please use the Telegram bot.</p>
+            <p className="text-sm font-semibold mb-2">Welcome to Fanos Bingo!</p>
+            <p className="text-xs mb-2 opacity-90">Connect your BNB wallet to make deposits and withdrawals.</p>
+            <p className="text-xs mb-2 opacity-90">To play games, you must first register via our Telegram bot.</p>
             <WalletConnect
               telegramUserId={0}
               onWalletConnected={() => addToast('Wallet connected successfully! You can now make deposits.', 'success')}
             />
+          </div>
+        )}
+        {!telegramUser && isWalletConnected && (
+          <div className={`border-l-4 p-3 mb-3 rounded transition-colors duration-300 ${isDarkMode ? 'bg-orange-900/20 border-orange-600 text-orange-300' : 'bg-orange-50 border-orange-400 text-orange-800'}`}>
+            <p className="text-sm font-semibold mb-2">Telegram Connection Required to Play</p>
+            <p className="text-xs mb-2 opacity-90">Your wallet is connected for deposits/withdrawals, but you need to connect via Telegram to play games.</p>
+            <p className="text-xs mb-2 opacity-90">Please open this game through our Telegram bot to start playing.</p>
+            <div className="flex gap-2 mt-3">
+              <button
+                onClick={() => setIsWalletDepositModalOpen(true)}
+                className={`flex-1 py-2 px-4 rounded-lg font-semibold transition-colors ${isDarkMode ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-emerald-600 hover:bg-emerald-700 text-white'}`}
+              >
+                Deposit BNB
+              </button>
+              <button
+                onClick={() => setIsBnbWithdrawalModalOpen(true)}
+                disabled={!registeredUser || !registeredUser.won_balance || registeredUser.won_balance === 0}
+                className={`flex-1 py-2 px-4 rounded-lg font-semibold transition-colors ${
+                  registeredUser && registeredUser.won_balance > 0
+                    ? isDarkMode ? 'bg-yellow-600 hover:bg-yellow-700 text-white' : 'bg-yellow-600 hover:bg-yellow-700 text-white'
+                    : isDarkMode ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                }`}
+              >
+                Withdraw BNB
+              </button>
+            </div>
           </div>
         )}
         {telegramUser && !registeredUser && !isCheckingRegistration && (

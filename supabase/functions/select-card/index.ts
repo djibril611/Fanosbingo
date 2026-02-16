@@ -31,6 +31,17 @@ Deno.serve(async (req: Request) => {
     const supabase = getSupabaseClient();
     const { gameId, cardNumber, telegramUserId, playerName, telegramUsername, telegramFirstName, telegramLastName, cardLayout: providedLayout } = await req.json();
 
+    if (!telegramUserId || telegramUserId <= 0) {
+      return new Response(
+        JSON.stringify({
+          error: 'Telegram connection required',
+          error_code: 'TELEGRAM_REQUIRED',
+          message: 'You must connect your Telegram account to play. Please open the game through the Telegram bot first.'
+        }),
+        { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     let card: number[][];
 
     // Use provided layout if available, otherwise fetch from database

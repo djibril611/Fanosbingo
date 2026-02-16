@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { X, Wallet, AlertCircle, CheckCircle, Loader2 } from 'lucide-react';
 import { useAccount, useBalance, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
 import { parseEther, formatEther } from 'viem';
@@ -26,7 +26,9 @@ export function WalletDepositModal({ isOpen, onClose, telegramUserId, onSuccess 
   const [error, setError] = useState('');
   const [contractAddress, setContractAddress] = useState('');
   const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isBalanceCredited, setIsBalanceCredited] = useState(false);
+  const hasSubmitted = useRef(false);
 
   const { data: balance } = useBalance({
     address: address,
@@ -43,17 +45,69 @@ export function WalletDepositModal({ isOpen, onClose, telegramUserId, onSuccess 
       loadContractAddress();
       setAmount('');
       setError('');
+      setIsSubmitting(false);
+      setIsBalanceCredited(false);
+      hasSubmitted.current = false;
     }
   }, [isOpen]);
 
   useEffect(() => {
-    if (isConfirmed && onSuccess) {
-      setTimeout(() => {
-        onSuccess();
-        onClose();
-      }, 2000);
+    if (isConfirmed && hash && !hasSubmitted.current) {
+      hasSubmitted.current = true;
+      submitDepositToDatabase(hash);
     }
-  }, [isConfirmed, onSuccess, onClose]);
+  }, [isConfirmed, hash]);
+
+  const submitDepositToDatabase = async (txHash: string) => {
+    setIsSubmitting(true);
+    setError('');
+    const maxRetries = 5;
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        if (attempt > 0) {
+          await new Promise(r => setTimeout(r, 3000 * attempt));
+        }
+
+        const response = await fetch(
+          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/submit-deposit`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              transactionHash: txHash,
+              telegramUserId,
+            }),
+          }
+        );
+
+        const result = await response.json();
+
+        if (response.ok && result.success) {
+          setIsBalanceCredited(true);
+          setIsSubmitting(false);
+          if (onSuccess) onSuccess();
+          return;
+        }
+
+        if (result.error?.includes('Transaction not found')) {
+          continue;
+        }
+
+        setError(result.error || 'Failed to credit deposit');
+        setIsSubmitting(false);
+        return;
+      } catch {
+        if (attempt === maxRetries - 1) {
+          setError('Could not verify deposit. Please click "Check Status" to retry.');
+          setIsSubmitting(false);
+        }
+      }
+    }
+  };
 
   const loadContractAddress = async () => {
     try {
@@ -132,28 +186,9 @@ export function WalletDepositModal({ isOpen, onClose, telegramUserId, onSuccess 
   };
 
   const refreshTransactions = async () => {
-    setIsRefreshing(true);
-    try {
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/monitor-deposits`,
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-            'Content-Type': 'application/json',
-          },
-        }
-      );
-
-      if (response.ok) {
-        setTimeout(() => {
-          window.location.reload();
-        }, 1500);
-      }
-    } catch (err) {
-      console.error('Error refreshing transactions:', err);
-    } finally {
-      setIsRefreshing(false);
+    if (hash) {
+      hasSubmitted.current = false;
+      await submitDepositToDatabase(hash);
     }
   };
 
@@ -198,7 +233,7 @@ export function WalletDepositModal({ isOpen, onClose, telegramUserId, onSuccess 
                     <p className="font-semibold mb-1">Game Cost: 0.01 BNB per game</p>
                     <p className="mb-2">Enter the amount you want to deposit to your account.</p>
                     <p className="text-xs text-blue-700">
-                      After sending, click "Check Status" to scan the blockchain and credit your account.
+                      Your balance will be credited automatically after blockchain confirmation.
                     </p>
                   </div>
                 </div>
@@ -274,56 +309,70 @@ export function WalletDepositModal({ isOpen, onClose, telegramUserId, onSuccess 
                 </div>
               )}
 
-              {isConfirmed && (
-                <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-green-800 text-sm flex items-center gap-2">
-                  <CheckCircle className="w-5 h-5" />
-                  <span>Deposit successful! Credits will be added shortly.</span>
+              {isConfirmed && isSubmitting && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-blue-800 text-sm flex items-center gap-2">
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  <span>Verifying deposit on blockchain...</span>
                 </div>
               )}
 
-              <button
-                onClick={handleDeposit}
-                disabled={isPending || isConfirming || isConfirmed || !amount || Number(amount) <= 0}
-                className="w-full bg-yellow-600 hover:bg-yellow-700 disabled:bg-gray-400 text-white font-semibold py-3 px-6 rounded-lg transition flex items-center justify-center gap-2"
-              >
-                {isPending || isConfirming ? (
-                  <>
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                    Processing...
-                  </>
-                ) : isConfirmed ? (
-                  <>
-                    <CheckCircle className="w-5 h-5" />
-                    Success!
-                  </>
-                ) : (
-                  <>
-                    <Wallet className="w-5 h-5" />
-                    Deposit {amount || '0'} BNB
-                  </>
-                )}
-              </button>
+              {isBalanceCredited && (
+                <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-green-800 text-sm flex items-center gap-2">
+                  <CheckCircle className="w-5 h-5" />
+                  <span>Deposit confirmed and credited to your account!</span>
+                </div>
+              )}
 
-              <p className="text-xs text-gray-500 text-center">
-                Funds will be available immediately after blockchain confirmation
-              </p>
+              {!isBalanceCredited && (
+                <button
+                  onClick={handleDeposit}
+                  disabled={isPending || isConfirming || isConfirmed || !amount || Number(amount) <= 0}
+                  className="w-full bg-yellow-600 hover:bg-yellow-700 disabled:bg-gray-400 text-white font-semibold py-3 px-6 rounded-lg transition flex items-center justify-center gap-2"
+                >
+                  {isPending || isConfirming ? (
+                    <>
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                      Processing...
+                    </>
+                  ) : isConfirmed ? (
+                    <>
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                      Crediting balance...
+                    </>
+                  ) : (
+                    <>
+                      <Wallet className="w-5 h-5" />
+                      Deposit {amount || '0'} BNB
+                    </>
+                  )}
+                </button>
+              )}
 
-              {isConfirmed && (
-                <div className="mt-4 space-y-3">
-                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                    <p className="text-sm text-blue-800 font-medium mb-2">Transaction Sent Successfully!</p>
-                    <p className="text-xs text-blue-700 mb-3">
-                      Your deposit is being processed. It may take a few minutes for your balance to update.
-                    </p>
-                    <button
-                      onClick={refreshTransactions}
-                      disabled={isRefreshing}
-                      className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-lg transition text-sm font-medium"
-                    >
-                      <Loader2 className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-                      {isRefreshing ? 'Checking Blockchain...' : 'Check Status & Refresh Balance'}
-                    </button>
-                  </div>
+              {isBalanceCredited && (
+                <button
+                  onClick={onClose}
+                  className="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-6 rounded-lg transition flex items-center justify-center gap-2"
+                >
+                  <CheckCircle className="w-5 h-5" />
+                  Done
+                </button>
+              )}
+
+              {!isBalanceCredited && (
+                <p className="text-xs text-gray-500 text-center">
+                  Funds will be available immediately after blockchain confirmation
+                </p>
+              )}
+
+              {isConfirmed && !isSubmitting && !isBalanceCredited && error && (
+                <div className="mt-2">
+                  <button
+                    onClick={refreshTransactions}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition text-sm font-medium"
+                  >
+                    <Loader2 className="w-4 h-4" />
+                    Retry - Check Status
+                  </button>
                 </div>
               )}
             </div>

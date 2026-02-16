@@ -833,9 +833,9 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
               </button>
               <button
                 onClick={() => setIsBnbWithdrawalModalOpen(true)}
-                disabled={!registeredUser.won_balance || registeredUser.won_balance === 0}
+                disabled={(!registeredUser.won_balance || registeredUser.won_balance === 0) && (!registeredUser.deposited_balance || registeredUser.deposited_balance === 0)}
                 className={`flex-1 py-2 px-4 rounded-lg font-semibold transition-colors ${
-                  registeredUser.won_balance > 0
+                  (registeredUser.won_balance > 0 || registeredUser.deposited_balance > 0)
                     ? 'bg-yellow-600 hover:bg-yellow-700 text-white'
                     : isDarkMode ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-gray-200 text-gray-400 cursor-not-allowed'
                 }`}
@@ -994,6 +994,7 @@ export function Lobby({ onJoinGame, onSpectateGame, telegramUser }: LobbyProps) 
             onClose={() => setIsBnbWithdrawalModalOpen(false)}
             telegramUserId={telegramUser.id}
             wonBalance={registeredUser?.won_balance || 0}
+            depositedBalance={registeredUser?.deposited_balance || 0}
             onSuccess={() => {
               addToast('Withdrawal request submitted successfully!', 'success');
               loadLobbyDataOptimized();

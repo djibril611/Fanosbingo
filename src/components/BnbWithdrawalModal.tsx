@@ -13,6 +13,7 @@ interface BnbWithdrawalModalProps {
   onClose: () => void;
   telegramUserId: number;
   wonBalance: number;
+  depositedBalance: number;
   onSuccess?: () => void;
 }
 
@@ -23,6 +24,7 @@ export function BnbWithdrawalModal({
   onClose,
   telegramUserId,
   wonBalance,
+  depositedBalance,
   onSuccess
 }: BnbWithdrawalModalProps) {
   const { address, isConnected } = useAccount();
@@ -37,6 +39,7 @@ export function BnbWithdrawalModal({
   const [creditsToRate, setCreditsToRate] = useState(1000);
   const [onChainCredits, setOnChainCredits] = useState<bigint>(0n);
   const [activeStep, setActiveStep] = useState<Step>('claim');
+  const [withdrawalSource, setWithdrawalSource] = useState<'won' | 'deposited' | 'both'>('both');
   const [recentHistory, setRecentHistory] = useState<Array<{
     id: string;
     amount_bnb: number;
@@ -125,12 +128,12 @@ export function BnbWithdrawalModal({
   }, [contractBalanceData]);
 
   useEffect(() => {
-    if (onChainCredits > 0n && wonBalance <= 0) {
+    if (onChainCredits > 0n && wonBalance <= 0 && depositedBalance <= 0) {
       setActiveStep('withdraw');
     } else {
       setActiveStep('claim');
     }
-  }, [onChainCredits, wonBalance]);
+  }, [onChainCredits, wonBalance, depositedBalance]);
 
   useEffect(() => {
     if (isConfirmed && hash && !recordingWithdrawal) {
@@ -263,6 +266,7 @@ export function BnbWithdrawalModal({
           body: JSON.stringify({
             telegramUserId,
             walletAddress: address,
+            withdrawalSource,
           }),
           signal: controller.signal,
         }
@@ -367,8 +371,12 @@ export function BnbWithdrawalModal({
   if (!isOpen) return null;
 
   const wonBalanceBnb = wonBalance / creditsToRate;
+  const depositedBalanceBnb = depositedBalance / creditsToRate;
+  const totalAvailableBnb = wonBalanceBnb + depositedBalanceBnb;
   const onChainBnb = getAvailableBnb();
   const hasWonBalance = wonBalance > 0;
+  const hasDepositedBalance = depositedBalance > 0;
+  const hasAnyBalance = hasWonBalance || hasDepositedBalance;
   const hasOnChain = onChainCredits > 0n;
   const contractBalanceBnb = Number(formatEther(contractBalance));
   const hasLowContractBalance = contractBalanceBnb < 1 && contractBalanceBnb > 0;
@@ -451,27 +459,36 @@ export function BnbWithdrawalModal({
                 </button>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div className={`rounded-xl p-3.5 border transition-all ${
+              <div className="grid grid-cols-3 gap-2">
+                <div className={`rounded-xl p-3 border transition-all ${
                   hasWonBalance ? 'bg-blue-500/8 border-blue-500/15 shadow-sm shadow-blue-500/5' : 'bg-gray-800/30 border-gray-700/30'
                 }`}>
                   <p className="text-[10px] text-gray-500 uppercase tracking-wider font-medium mb-1">Winnings</p>
-                  <p className={`text-xl font-bold stat-value ${hasWonBalance ? 'text-blue-400' : 'text-gray-600'}`}>
+                  <p className={`text-lg font-bold stat-value ${hasWonBalance ? 'text-blue-400' : 'text-gray-600'}`}>
                     {wonBalanceBnb.toFixed(4)}
                   </p>
-                  <p className="text-[10px] text-gray-500 mt-0.5">BNB ({wonBalance.toLocaleString()} cr)</p>
+                  <p className="text-[9px] text-gray-500 mt-0.5">BNB</p>
                 </div>
-                <div className={`rounded-xl p-3.5 border transition-all ${
+                <div className={`rounded-xl p-3 border transition-all ${
+                  hasDepositedBalance ? 'bg-purple-500/8 border-purple-500/15 shadow-sm shadow-purple-500/5' : 'bg-gray-800/30 border-gray-700/30'
+                }`}>
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider font-medium mb-1">Deposited</p>
+                  <p className={`text-lg font-bold stat-value ${hasDepositedBalance ? 'text-purple-400' : 'text-gray-600'}`}>
+                    {depositedBalanceBnb.toFixed(4)}
+                  </p>
+                  <p className="text-[9px] text-gray-500 mt-0.5">BNB</p>
+                </div>
+                <div className={`rounded-xl p-3 border transition-all ${
                   hasOnChain ? 'bg-emerald-500/8 border-emerald-500/15 shadow-sm shadow-emerald-500/5' : 'bg-gray-800/30 border-gray-700/30'
                 }`}>
                   <div className="flex items-center gap-1 mb-1">
                     <p className="text-[10px] text-gray-500 uppercase tracking-wider font-medium">Ready</p>
                     {hasOnChain && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-subtlePulse" />}
                   </div>
-                  <p className={`text-xl font-bold stat-value ${hasOnChain ? 'text-emerald-400' : 'text-gray-600'}`}>
+                  <p className={`text-lg font-bold stat-value ${hasOnChain ? 'text-emerald-400' : 'text-gray-600'}`}>
                     {onChainBnb.toFixed(4)}
                   </p>
-                  <p className="text-[10px] text-gray-500 mt-0.5">BNB (withdrawable)</p>
+                  <p className="text-[9px] text-gray-500 mt-0.5">BNB</p>
                 </div>
               </div>
 
@@ -488,11 +505,57 @@ export function BnbWithdrawalModal({
                       </div>
                     </div>
 
-                    {hasWonBalance ? (
+                    {hasAnyBalance ? (
                       <>
+                        {hasWonBalance && hasDepositedBalance && (
+                          <div className="mb-3">
+                            <label className="block text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-2">Withdraw from</label>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => setWithdrawalSource('won')}
+                                className={`flex-1 py-2 px-3 rounded-lg text-xs font-semibold transition-all ${
+                                  withdrawalSource === 'won'
+                                    ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                                    : 'bg-gray-800/30 text-gray-400 border border-gray-700/30 hover:bg-gray-800/50'
+                                }`}
+                              >
+                                Winnings ({wonBalanceBnb.toFixed(4)})
+                              </button>
+                              <button
+                                onClick={() => setWithdrawalSource('deposited')}
+                                className={`flex-1 py-2 px-3 rounded-lg text-xs font-semibold transition-all ${
+                                  withdrawalSource === 'deposited'
+                                    ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                                    : 'bg-gray-800/30 text-gray-400 border border-gray-700/30 hover:bg-gray-800/50'
+                                }`}
+                              >
+                                Deposited ({depositedBalanceBnb.toFixed(4)})
+                              </button>
+                              <button
+                                onClick={() => setWithdrawalSource('both')}
+                                className={`flex-1 py-2 px-3 rounded-lg text-xs font-semibold transition-all ${
+                                  withdrawalSource === 'both'
+                                    ? 'bg-gradient-to-r from-blue-500/20 to-purple-500/20 text-white border border-blue-500/30'
+                                    : 'bg-gray-800/30 text-gray-400 border border-gray-700/30 hover:bg-gray-800/50'
+                                }`}
+                              >
+                                Both ({totalAvailableBnb.toFixed(4)})
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
                         <div className="flex items-center justify-between bg-gray-900/40 rounded-lg p-3 mb-3 border border-gray-800/50">
                           <span className="text-gray-400 text-sm">Amount to claim</span>
-                          <span className="text-blue-400 font-bold text-lg stat-value">{wonBalanceBnb.toFixed(4)} BNB</span>
+                          <span className={`font-bold text-lg stat-value ${
+                            withdrawalSource === 'won' ? 'text-blue-400' :
+                            withdrawalSource === 'deposited' ? 'text-purple-400' :
+                            'text-white'
+                          }`}>
+                            {withdrawalSource === 'won' ? wonBalanceBnb.toFixed(4) :
+                             withdrawalSource === 'deposited' ? depositedBalanceBnb.toFixed(4) :
+                             totalAvailableBnb.toFixed(4)} BNB
+                          </span>
                         </div>
 
                         <button
@@ -516,7 +579,7 @@ export function BnbWithdrawalModal({
                       </>
                     ) : (
                       <div className="text-center py-4">
-                        <p className="text-gray-500 text-sm">No winnings to claim right now</p>
+                        <p className="text-gray-500 text-sm">No balance to claim right now</p>
                         {hasOnChain && (
                           <button
                             onClick={() => setActiveStep('withdraw')}
@@ -533,7 +596,7 @@ export function BnbWithdrawalModal({
                     <div className="flex gap-2.5">
                       <Shield className="w-4 h-4 text-blue-400/70 flex-shrink-0 mt-0.5" />
                       <p className="text-blue-300/60 text-xs leading-relaxed">
-                        Claiming moves your database winnings to the smart contract.
+                        Claiming moves your balance to the smart contract.
                         The system pays gas so you don't need BNB to claim.
                       </p>
                     </div>
@@ -630,12 +693,12 @@ export function BnbWithdrawalModal({
                     ) : (
                       <div className="text-center py-4">
                         <p className="text-gray-500 text-sm mb-2">No on-chain credits available</p>
-                        {hasWonBalance && (
+                        {hasAnyBalance && (
                           <button
                             onClick={() => setActiveStep('claim')}
                             className="text-blue-400 text-sm font-medium hover:text-blue-300 transition-colors inline-flex items-center gap-1"
                           >
-                            Claim your winnings first <ArrowRight className="w-3 h-3" />
+                            Claim your balance first <ArrowRight className="w-3 h-3" />
                           </button>
                         )}
                       </div>

@@ -17,6 +17,7 @@ interface ClaimRequest {
   telegramUserId: number;
   walletAddress: string;
   amountBnb?: number;
+  withdrawalSource?: 'won' | 'deposited' | 'both';
 }
 
 Deno.serve(async (req: Request) => {
@@ -25,7 +26,7 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const { telegramUserId, walletAddress, amountBnb }: ClaimRequest = await req.json();
+    const { telegramUserId, walletAddress, amountBnb, withdrawalSource = 'both' }: ClaimRequest = await req.json();
 
     if (!telegramUserId || !walletAddress) {
       throw new Error("Missing required fields");
@@ -42,7 +43,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: user } = await supabaseClient
       .from("telegram_users")
-      .select("won_balance")
+      .select("won_balance, deposited_balance")
       .eq("telegram_user_id", telegramUserId)
       .maybeSingle();
 
@@ -50,11 +51,14 @@ Deno.serve(async (req: Request) => {
       throw new Error("User not found");
     }
 
-    if (user.won_balance <= 0) {
+    const availableWonBalance = user.won_balance || 0;
+    const availableDepositedBalance = user.deposited_balance || 0;
+
+    if (availableWonBalance <= 0 && availableDepositedBalance <= 0) {
       return new Response(
         JSON.stringify({
           success: false,
-          error: "No winnings available to claim",
+          error: "No balance available to claim",
         }),
         {
           status: 400,
@@ -98,17 +102,31 @@ Deno.serve(async (req: Request) => {
       throw new Error(`Missing configuration: ${missing.join(", ")}`);
     }
 
+    let wonToWithdraw = 0;
+    let depositedToWithdraw = 0;
+
+    if (withdrawalSource === 'won') {
+      wonToWithdraw = availableWonBalance;
+    } else if (withdrawalSource === 'deposited') {
+      depositedToWithdraw = availableDepositedBalance;
+    } else {
+      wonToWithdraw = availableWonBalance;
+      depositedToWithdraw = availableDepositedBalance;
+    }
+
+    const totalCreditsToWithdraw = wonToWithdraw + depositedToWithdraw;
+
     const amountToClaimCredits = amountBnb
-      ? Math.min(amountBnb * creditsToRnbRate, user.won_balance)
-      : user.won_balance;
+      ? Math.min(amountBnb * creditsToRnbRate, totalCreditsToWithdraw)
+      : totalCreditsToWithdraw;
 
     const amountToClaimBnb = amountToClaimCredits / creditsToRnbRate;
 
-    if (amountToClaimBnb < 0.1) {
+    if (amountToClaimBnb < 0.01) {
       return new Response(
         JSON.stringify({
           success: false,
-          error: "Minimum claim amount is 0.1 BNB",
+          error: "Minimum claim amount is 0.01 BNB",
         }),
         {
           status: 400,
@@ -117,14 +135,36 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    let creditsRemaining = amountToClaimCredits;
+    let wonDeduction = 0;
+    let depositedDeduction = 0;
+
+    if (withdrawalSource === 'won' || withdrawalSource === 'both') {
+      wonDeduction = Math.min(creditsRemaining, wonToWithdraw);
+      creditsRemaining -= wonDeduction;
+    }
+
+    if ((withdrawalSource === 'deposited' || withdrawalSource === 'both') && creditsRemaining > 0) {
+      depositedDeduction = Math.min(creditsRemaining, depositedToWithdraw);
+    }
+
+    const updates: { won_balance?: number; deposited_balance?: number } = {};
+    if (wonDeduction > 0) {
+      updates.won_balance = availableWonBalance - wonDeduction;
+    }
+    if (depositedDeduction > 0) {
+      updates.deposited_balance = availableDepositedBalance - depositedDeduction;
+    }
+
     const { error: updateError } = await supabaseClient
       .from("telegram_users")
-      .update({ won_balance: user.won_balance - amountToClaimCredits })
+      .update(updates)
       .eq("telegram_user_id", telegramUserId)
-      .eq("won_balance", user.won_balance);
+      .eq("won_balance", availableWonBalance)
+      .eq("deposited_balance", availableDepositedBalance);
 
     if (updateError) {
-      throw new Error("Failed to update won_balance. Please try again.");
+      throw new Error("Failed to update balance. Please try again.");
     }
 
     try {
@@ -150,7 +190,8 @@ Deno.serve(async (req: Request) => {
             amountClaimedBnb: amountToClaimBnb,
             amountClaimedCredits: amountToClaimCredits,
             onChainCredits: ethers.formatEther(newCredits),
-            remainingWonBalance: user.won_balance - amountToClaimCredits,
+            remainingWonBalance: availableWonBalance - wonDeduction,
+            remainingDepositedBalance: availableDepositedBalance - depositedDeduction,
           }),
           {
             status: 200,
@@ -158,17 +199,25 @@ Deno.serve(async (req: Request) => {
           }
         );
       } else {
+        const rollbackUpdates: { won_balance?: number; deposited_balance?: number } = {};
+        if (wonDeduction > 0) rollbackUpdates.won_balance = availableWonBalance;
+        if (depositedDeduction > 0) rollbackUpdates.deposited_balance = availableDepositedBalance;
+
         await supabaseClient
           .from("telegram_users")
-          .update({ won_balance: user.won_balance })
+          .update(rollbackUpdates)
           .eq("telegram_user_id", telegramUserId);
 
         throw new Error("Transaction failed on chain");
       }
     } catch (blockchainError: unknown) {
+      const rollbackUpdates: { won_balance?: number; deposited_balance?: number } = {};
+      if (wonDeduction > 0) rollbackUpdates.won_balance = availableWonBalance;
+      if (depositedDeduction > 0) rollbackUpdates.deposited_balance = availableDepositedBalance;
+
       await supabaseClient
         .from("telegram_users")
-        .update({ won_balance: user.won_balance })
+        .update(rollbackUpdates)
         .eq("telegram_user_id", telegramUserId);
 
       throw blockchainError;

@@ -222,5 +222,5 @@ Fanos Bingo is the foundation for a broader ecosystem of on-chain competitive mi
 
 The next major milestone is integrating autonomous AI agents that can participate as players. These agents will learn game patterns, compete against human players, and eventually enable fully agent-vs-agent matches. All outcomes will be recorded on-chain, creating provably fair, transparent competition between humans and AI.
 
-This opens a new category of blockchain-native gaming where skill, speed, and strategy determine winners - not chance.
-https://stackblitz.com/storage/blobs/redirect/eyJfcmFpbHMiOnsiZGF0YSI6MTQwOTQzNjA1LCJwdXIiOiJibG9iX2lkIn19--9c6c771d164b465730116a5c30aed6debc40f7a7/README.md
+
+
